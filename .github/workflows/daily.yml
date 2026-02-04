@@ -1,0 +1,113 @@
+name: jobflow-ai Daily Run
+
+on:
+  schedule:
+    # Run daily at 9 AM EST (14:00 UTC)
+    - cron: '0 14 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  DAILY_BUDGET: '0.75'  # Default daily budget in USD
+
+jobs:
+  discover-and-process:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install LaTeX (for PDF generation)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-latex-base texlive-fonts-recommended texlive-latex-extra
+
+      - name: Run jobflow-ai
+        id: discover
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Run discovery with budget limit
+          python main.py discover --process \
+            --max-cost ${{ vars.DAILY_BUDGET || env.DAILY_BUDGET }} \
+            --output outputs/
+
+          # Get today's date
+          TODAY=$(date +%Y-%m-%d)
+
+          # Check if we processed any jobs
+          if [ -f "outputs/$TODAY/daily_summary.md" ]; then
+            # Count processed jobs from summary
+            COUNT=$(grep -c "^###" "outputs/$TODAY/daily_summary.md" || echo "0")
+            echo "count=$COUNT" >> $GITHUB_OUTPUT
+            echo "today=$TODAY" >> $GITHUB_OUTPUT
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          else
+            echo "count=0" >> $GITHUB_OUTPUT
+            echo "today=$TODAY" >> $GITHUB_OUTPUT
+            echo "has_results=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: jobflow-results-${{ steps.discover.outputs.today }}
+          path: outputs/
+          retention-days: 30
+
+      - name: Upload budget log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: budget-log-${{ steps.discover.outputs.today }}
+          path: outputs/${{ steps.discover.outputs.today }}/budget_log.json
+          retention-days: 30
+
+      - name: Send email notification
+        if: steps.discover.outputs.has_results == 'true' && steps.discover.outputs.count > 0
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          secure: true
+          username: ${{ secrets.EMAIL_USER }}
+          password: ${{ secrets.EMAIL_APP_PASSWORD }}
+          subject: "jobflow-ai: ${{ steps.discover.outputs.count }} Job Matches Found"
+          to: ${{ secrets.EMAIL_TO }}
+          from: jobflow-ai <${{ secrets.EMAIL_USER }}>
+          body: file://outputs/${{ steps.discover.outputs.today }}/daily_summary.md
+          attachments: outputs/${{ steps.discover.outputs.today }}/**/resume.pdf
+          convert_markdown: true
+
+      - name: Post summary to job
+        if: always()
+        run: |
+          echo "## jobflow-ai Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date**: ${{ steps.discover.outputs.today }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Jobs Processed**: ${{ steps.discover.outputs.count }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "outputs/${{ steps.discover.outputs.today }}/budget_log.json" ]; then
+            echo "### Budget" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat "outputs/${{ steps.discover.outputs.today }}/budget_log.json" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -f "outputs/${{ steps.discover.outputs.today }}/daily_summary.md" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            cat "outputs/${{ steps.discover.outputs.today }}/daily_summary.md" >> $GITHUB_STEP_SUMMARY
+          fi

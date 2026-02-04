@@ -1,0 +1,86 @@
+# Outputs (generated resumes, analysis)
+outputs/
+
+# Personal data (user's resume, companies list)
+data/resume.yaml
+data/resume.yaml.bak
+data/companies.yaml
+data/original/
+data/resume_variants/meta.yaml
+
+# Project-specific docs (not for public repo)
+CLAUDE.md
+TODO.md
+
+# Test files
+test_*.py
+
+# Claude Code settings
+.claude/
+
+# Misc
+nul
+run.ps1
+
+# Cache (seen jobs)
+cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+# User's original resume (if placed here)
+data/original/*.tex
+data/original/*.pdf
+
+# Secrets
+*.pem
+*.key
+credentials.json

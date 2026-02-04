@@ -1,0 +1,85 @@
+# Example resume.yaml - Copy to resume.yaml and fill in your info
+# See README.md for full documentation
+
+meta:
+  version: 1
+  last_updated: "2025-01-01"
+
+contact:
+  name: "Your Full Name"
+  email: "you@example.com"
+  phone: "+1-555-555-5555"
+  location: "City, State"
+  linkedin: "linkedin.com/in/yourprofile"
+  github: "github.com/yourusername"
+  website: "yoursite.com"  # optional
+
+summary:
+  default: "Your professional summary here. 2-3 sentences highlighting your experience and what you're looking for."
+  variants:
+    research: "Research-focused summary variant..."
+    engineering: "Engineering-focused summary variant..."
+
+experience:
+  - company: "Current Company"
+    role: "Senior Software Engineer"
+    location: "San Francisco, CA"
+    start_date: "2022-01"
+    end_date: "present"
+    highlights:
+      - "Built X that resulted in Y% improvement in Z"
+      - "Led team of N engineers to deliver ABC"
+      - "Designed and implemented feature that served M users"
+    tags: ["python", "ml", "leadership", "backend"]
+
+  - company: "Previous Company"
+    role: "Software Engineer"
+    location: "New York, NY"
+    start_date: "2019-06"
+    end_date: "2021-12"
+    highlights:
+      - "Achievement 1 with quantified impact"
+      - "Achievement 2 with quantified impact"
+    tags: ["java", "aws", "microservices"]
+
+education:
+  - institution: "University Name"
+    degree: "B.S. Computer Science"
+    graduation: "2019"
+    location: "City, State"
+    gpa: "3.8"  # optional
+    highlights:
+      - "Relevant coursework, honors, thesis, etc."
+
+skills:
+  languages: ["Python", "TypeScript", "Go", "SQL"]
+  ml_and_ai: ["PyTorch", "TensorFlow", "LLMs", "RAG"]
+  infrastructure: ["AWS", "Docker", "Kubernetes"]
+  practices: ["CI/CD", "Agile", "System Design"]
+
+publications:  # optional
+  conference_papers:
+    - title: "Paper Title"
+      venue: "Conference Name 2024"
+      authors: ["Your Name", "Coauthor Name"]
+      status: "published"
+      arxiv: "https://arxiv.org/abs/..."
+
+projects:  # optional
+  - name: "Project Name"
+    url: "github.com/you/project"
+    description: "Brief description of what it does"
+    tags: ["python", "ml"]
+
+# For LinkedIn outreach personalization
+outreach_context:
+  schools:
+    - "University Name"
+  previous_companies:
+    - "Previous Company"
+    - "Another Company"
+  backgrounds:
+    - "Open source contributor"
+    - "Career changer from X field"
+  locations:
+    - "Bay Area"

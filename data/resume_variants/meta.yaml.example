@@ -1,0 +1,116 @@
+# Resume Variant Metadata - Example
+# Copy to meta.yaml and customize for your resume variants
+#
+# This file defines keyword signals for automatic variant selection.
+# When a job description matches certain keywords, the system selects
+# the most appropriate resume variant.
+
+variants:
+  # Example: Software Engineering focused variant
+  software_engineering:
+    file: "data/original/software_engineering.tex"
+    description: "General software engineering focus. Experience-first, technical depth."
+    summary_line: "Software Engineer | Backend Systems, Distributed Computing, API Design"
+    primary_signals:
+      - "software engineer"
+      - "backend engineer"
+      - "full stack"
+      - "distributed systems"
+      - "API"
+      - "microservices"
+    secondary_signals:
+      - "Python"
+      - "Java"
+      - "Go"
+      - "cloud"
+      - "AWS"
+      - "Kubernetes"
+    anti_signals:
+      - "PhD required"
+      - "research scientist"
+      - "faculty"
+    role_types:
+      - "software_engineer"
+      - "backend_engineer"
+    section_order:
+      - "experience"
+      - "skills"
+      - "education"
+      - "projects"
+
+  # Example: Machine Learning focused variant
+  machine_learning:
+    file: "data/original/machine_learning.tex"
+    description: "ML/AI engineering focus. Projects and experience emphasized."
+    summary_line: "Machine Learning Engineer | Deep Learning, NLP, Production ML Systems"
+    primary_signals:
+      - "machine learning"
+      - "ML engineer"
+      - "deep learning"
+      - "NLP"
+      - "computer vision"
+      - "LLM"
+      - "AI"
+    secondary_signals:
+      - "PyTorch"
+      - "TensorFlow"
+      - "neural network"
+      - "model training"
+      - "MLOps"
+    anti_signals:
+      - "frontend"
+      - "UI/UX"
+      - "marketing"
+    role_types:
+      - "ml_engineer"
+      - "ai_engineer"
+      - "data_scientist"
+    section_order:
+      - "experience"
+      - "projects"
+      - "skills"
+      - "education"
+
+  # Example: Research focused variant
+  research:
+    file: "data/original/research.tex"
+    description: "Research/academic focus. Publications and education first."
+    summary_line: null  # Research CVs often don't have summary lines
+    primary_signals:
+      - "research scientist"
+      - "PhD"
+      - "publications"
+      - "postdoc"
+      - "research lab"
+    secondary_signals:
+      - "paper"
+      - "conference"
+      - "journal"
+      - "peer-reviewed"
+    anti_signals:
+      - "startup"
+      - "fast-paced"
+      - "ship quickly"
+    role_types:
+      - "research_scientist"
+      - "applied_scientist"
+    section_order:
+      - "education"
+      - "publications"
+      - "experience"
+      - "skills"
+
+# Scoring configuration
+scoring:
+  # Points awarded for each type of signal match
+  primary_signal_weight: 3    # Strong indicator of fit
+  secondary_signal_weight: 1  # Supporting indicator
+  anti_signal_weight: -5      # Strong indicator of misfit
+
+# Selection thresholds
+thresholds:
+  # Minimum score to consider a variant (below this = YAML fallback)
+  min_candidate_score: 5
+  # Score gap required for auto-selection without AI tiebreaker
+  # If top two variants are within this gap, Haiku decides
+  auto_select_threshold: 10

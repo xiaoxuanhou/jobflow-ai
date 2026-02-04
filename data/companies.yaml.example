@@ -1,0 +1,38 @@
+# Example companies.yaml - Copy to companies.yaml and customize
+# Add companies you want to monitor for job postings
+
+companies:
+  # AI Labs
+  - name: "Anthropic"
+    careers_url: "https://www.anthropic.com/careers"
+    ats: "greenhouse"
+
+  - name: "OpenAI"
+    careers_url: "https://openai.com/careers"
+    ats: "greenhouse"
+
+  - name: "DeepMind"
+    careers_url: "https://deepmind.google/careers"
+    ats: "google"
+
+  - name: "Cohere"
+    careers_url: "https://cohere.com/careers"
+    ats: "greenhouse"
+
+  # Tech Companies
+  - name: "Stripe"
+    careers_url: "https://stripe.com/jobs"
+    ats: "greenhouse"
+
+  - name: "Databricks"
+    careers_url: "https://databricks.com/company/careers"
+    ats: "lever"
+
+  - name: "Scale AI"
+    careers_url: "https://scale.com/careers"
+    ats: "greenhouse"
+
+  # Add your target companies here...
+  # - name: "Company Name"
+  #   careers_url: "https://company.com/careers"
+  #   ats: "greenhouse"  # or "lever", "workday", "google", etc.

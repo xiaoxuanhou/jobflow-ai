@@ -1,0 +1,108 @@
+# Job Search Criteria
+# Customize this file for your target roles
+
+search:
+  # Target role titles (at least one must match)
+  titles:
+    - "Applied Scientist"
+    - "Research Scientist"
+    - "Machine Learning Engineer"
+    - "ML Engineer"
+    - "Research Engineer"
+    - "Data Scientist"
+    - "Applied AI Scientist"
+    - "Optimization Scientist"
+    - "Technical Staff"
+
+  # Experience level keywords (optional)
+  levels:
+    - "Senior"
+    - "L5"
+    - "L6"
+    - "PhD New Grad"
+    - "Intern"
+    - "Fellowship"
+    - "Postdoc"
+
+  # Must have at least one of these (signal of relevant role)
+  # Jobs containing these keywords get bonus points
+  must_have_any:
+    - "machine learning"
+    - "ML"
+    - "AI"
+    - "deep learning"
+    - "LLM"
+    - "optimization"
+    - "data science"
+    - "stochastic modeling"
+    - "decision science"
+    - "agentic AI"
+    - "reinforcement learning"
+
+  # Exclude if contains any of these (hard filter)
+  exclude_if:
+    - "Director"
+    - "VP"
+    - "Vice President"
+    - "Chief"
+    # Uncomment if you don't have PhD:
+    # - "PhD required"
+
+  # Target locations
+  locations:
+    - "San Francisco"
+    - "Bay Area"
+    - "Seattle"
+    - "New York"
+    - "Remote"
+    - "Hybrid"
+    - "London"
+    - "Toronto"
+
+# Rule-based pre-filter settings (free, before AI)
+rule_filter:
+  # Strict location matching (False = allow any location through)
+  location_strict: false
+
+  # Seniority levels to exclude (in addition to exclude_if)
+  seniority_exclude:
+    - "Director"
+    - "VP"
+    - "Head of"
+    - "Chief"
+    - "Manager"  # Uncomment if you want IC roles only
+
+# LinkedIn/Google search fallback (in addition to company careers)
+linkedin_search:
+  enabled: true
+  queries:
+    - "Machine Learning Engineer"
+    - "Applied Scientist"
+    - "Research Scientist"
+    - "Optimization Scientist"
+    - "Data Scientist"
+    - "Intern"
+  locations:
+    - "San Francisco Bay Area"
+    - "Seattle"
+    - "Remote"
+    - "Hybrid"
+  posted_within: "24h"
+
+# Filtering & Ranking thresholds
+thresholds:
+  # Stage 1: Loose filter - keep jobs scoring this or above
+  loose_filter_min: 5
+
+  # Stage 2: After ranking, process this many
+  max_jobs_to_process: 5
+
+# Ranking priorities (weights for consistent ranking step)
+# Weights should sum to 1.0
+ranking_priorities:
+  skills_match: 0.25         # Technical skills alignment
+  role_type_match: 0.25      # Role type alignment (e.g., Applied Scientist vs generic SWE)
+  domain_focus: 0.20         # Relevant domain (ML, AI, etc.)
+  research_production: 0.15  # Research vs production balance
+  company_fit: 0.10          # Company's focus and culture
+  seniority_fit: 0.05        # Level appropriateness
