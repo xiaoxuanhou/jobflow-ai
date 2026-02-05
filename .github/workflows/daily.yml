@@ -52,6 +52,28 @@ jobs:
           echo "=== LibreOffice Version ==="
           libreoffice --version || echo "LibreOffice version check failed"
 
+      - name: Create private data files from secrets
+        env:
+          COMPANIES_YAML: ${{ secrets.COMPANIES_YAML }}
+          CRITERIA_YAML: ${{ secrets.CRITERIA_YAML }}
+          RESUME_YAML: ${{ secrets.RESUME_YAML }}
+        run: |
+          echo "Creating data files from secrets..."
+          mkdir -p data
+
+          # Write YAML files from environment variables
+          echo "$COMPANIES_YAML" > data/companies.yaml
+          echo "$CRITERIA_YAML" > data/criteria.yaml
+          echo "$RESUME_YAML" > data/resume.yaml
+
+          echo "Data files created:"
+          ls -la data/
+
+          # Verify files are not empty
+          echo ""
+          echo "File sizes:"
+          wc -l data/*.yaml
+
       - name: Debug - Check environment
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
