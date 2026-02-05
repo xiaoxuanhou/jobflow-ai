@@ -155,6 +155,11 @@ def _search_careers_page(
 
 Look at their careers page: {careers_url}
 
+IMPORTANT FILTERS:
+- Location: ONLY include jobs in the United States (US cities, states, or "Remote - US")
+- Exclude jobs in other countries (Canada, UK, Europe, Asia, etc.)
+- Posted: Within the last 24 hours (1 day)
+
 Return a JSON object with:
 1. "status": One of "found_jobs", "no_matching_jobs", "page_inaccessible", "login_required", "no_recent_jobs"
 2. "jobs": JSON array of job postings (empty if none found)
@@ -164,11 +169,9 @@ For each job in the array include:
 - title: Job title
 - company: Company name
 - url: Direct URL to the job posting
-- location: Job location
+- location: Job location (must be in US)
 - posted_date: When posted (if available, estimate if within 24h/week/month)
 - description_preview: First 200 chars of description
-
-Only include jobs that appear to be posted within the last 24 hours (1 day).
 
 Example response:
 {{
@@ -263,15 +266,19 @@ Target roles: {titles_str}
 
 Search query: site:linkedin.com/jobs "{company_name}" ({titles_str.replace(', ', ' OR ')})
 
+IMPORTANT FILTERS:
+- Location: ONLY include jobs in the United States (US cities, states, or "Remote - US")
+- Exclude jobs in other countries
+- Posted: Within the last 24 hours (1 day)
+
 Return a JSON array of job postings found. For each job include:
 - title: Job title
 - company: Company name (should be {company_name})
 - url: LinkedIn job URL
-- location: Job location
+- location: Job location (must be in US)
 - posted_date: When posted (if available)
 - description_preview: First 200 chars of description
 
-Only include jobs that appear to be posted within the last 24 hours (1 day).
 Return ONLY the JSON array. If no jobs found, return [].
 
 Example format:
@@ -340,17 +347,21 @@ def search_linkedin_jobs(
 
 Target locations: {locations_str}
 
+IMPORTANT FILTERS:
+- Location: ONLY include jobs in the United States (US cities, states, or "Remote - US")
+- Exclude jobs in other countries
+- Posted: Within the last 24 hours (1 day)
+
 Search LinkedIn Jobs, Google Jobs, or company career sites.
 
 Return a JSON array of job postings. For each job include:
 - title: Job title
 - company: Company name
 - url: Direct URL to the job posting
-- location: Job location
+- location: Job location (must be in US)
 - posted_date: When posted (if available)
 - description_preview: First 200 chars of description
 
-Only include jobs posted within the last 24 hours (1 day).
 Return ONLY the JSON array. If no jobs found, return []."""
             }]
         )
