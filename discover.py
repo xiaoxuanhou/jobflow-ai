@@ -213,9 +213,16 @@ Or if no jobs:
                 parsed_jobs = []
                 for job in jobs:
                     if isinstance(job, dict) and job.get('url'):
+                        url = job['url']
+
+                        # Validate URL to filter out hallucinated links
+                        if not validate_url(url):
+                            print(f"      Skipping invalid/dead URL: {url[:60]}...")
+                            continue
+
                         if not job.get('company'):
                             job['company'] = company_name
-                        job['id'] = hashlib.md5(job['url'].encode()).hexdigest()[:12]
+                        job['id'] = hashlib.md5(url.encode()).hexdigest()[:12]
                         parsed_jobs.append(job)
 
                 if parsed_jobs:
@@ -373,7 +380,33 @@ Return ONLY the JSON array. If no jobs found, return []."""
         return []
 
 
-def parse_jobs_from_response(text: str, default_company: Optional[str]) -> list[dict]:
+def validate_url(url: str, timeout: float = 5.0) -> bool:
+    """
+    Check if a URL is valid and accessible (returns 200).
+
+    Args:
+        url: URL to validate
+        timeout: Request timeout in seconds
+
+    Returns:
+        True if URL returns 200, False otherwise
+    """
+    import httpx
+
+    try:
+        # Use HEAD request to avoid downloading full page
+        response = httpx.head(url, timeout=timeout, follow_redirects=True)
+        return response.status_code == 200
+    except Exception:
+        # Try GET if HEAD fails (some servers don't support HEAD)
+        try:
+            response = httpx.get(url, timeout=timeout, follow_redirects=True)
+            return response.status_code == 200
+        except Exception:
+            return False
+
+
+def parse_jobs_from_response(text: str, default_company: Optional[str], validate_urls: bool = True) -> list[dict]:
     """Parse job postings from API response text."""
     jobs = []
 
@@ -386,12 +419,20 @@ def parse_jobs_from_response(text: str, default_company: Optional[str]) -> list[
         parsed = json.loads(match.group())
         for job in parsed:
             if isinstance(job, dict) and job.get('url'):
+                url = job['url']
+
+                # Validate URL to filter out hallucinated links
+                if validate_urls:
+                    if not validate_url(url):
+                        print(f"      Skipping invalid/dead URL: {url[:60]}...")
+                        continue
+
                 # Ensure company is set
                 if not job.get('company') and default_company:
                     job['company'] = default_company
 
                 # Add job ID (hash of URL)
-                job['id'] = hashlib.md5(job['url'].encode()).hexdigest()[:12]
+                job['id'] = hashlib.md5(url.encode()).hexdigest()[:12]
 
                 jobs.append(job)
     except json.JSONDecodeError:
