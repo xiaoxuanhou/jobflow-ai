@@ -57,22 +57,41 @@ jobs:
           COMPANIES_YAML: ${{ secrets.COMPANIES_YAML }}
           CRITERIA_YAML: ${{ secrets.CRITERIA_YAML }}
           RESUME_YAML: ${{ secrets.RESUME_YAML }}
+          VARIANT_META_YAML: ${{ secrets.VARIANT_META_YAML }}
+          RESUME_TEX_APPLIED_AI: ${{ secrets.RESUME_TEX_APPLIED_AI }}
+          RESUME_TEX_AI_SAFETY: ${{ secrets.RESUME_TEX_AI_SAFETY }}
+          RESUME_TEX_INDUSTRY_BALANCED: ${{ secrets.RESUME_TEX_INDUSTRY_BALANCED }}
+          RESUME_TEX_OR_SCIENTIST: ${{ secrets.RESUME_TEX_OR_SCIENTIST }}
+          RESUME_TEX_RESEARCH_SCIENTIST: ${{ secrets.RESUME_TEX_RESEARCH_SCIENTIST }}
         run: |
           echo "Creating data files from secrets..."
-          mkdir -p data
+          mkdir -p data/original data/resume_variants
 
-          # Write YAML files from environment variables
+          # Write YAML config files
           echo "$COMPANIES_YAML" > data/companies.yaml
           echo "$CRITERIA_YAML" > data/criteria.yaml
           echo "$RESUME_YAML" > data/resume.yaml
 
-          echo "Data files created:"
-          ls -la data/
+          # Write variant meta (if provided)
+          if [ -n "$VARIANT_META_YAML" ]; then
+            echo "$VARIANT_META_YAML" > data/resume_variants/meta.yaml
+          fi
 
-          # Verify files are not empty
+          # Write .tex resume variants (if provided)
+          [ -n "$RESUME_TEX_APPLIED_AI" ] && echo "$RESUME_TEX_APPLIED_AI" > data/original/Applied_AI.tex
+          [ -n "$RESUME_TEX_AI_SAFETY" ] && echo "$RESUME_TEX_AI_SAFETY" > data/original/AI_safety.tex
+          [ -n "$RESUME_TEX_INDUSTRY_BALANCED" ] && echo "$RESUME_TEX_INDUSTRY_BALANCED" > data/original/industry_balanced.tex
+          [ -n "$RESUME_TEX_OR_SCIENTIST" ] && echo "$RESUME_TEX_OR_SCIENTIST" > data/original/OR_scientist.tex
+          [ -n "$RESUME_TEX_RESEARCH_SCIENTIST" ] && echo "$RESUME_TEX_RESEARCH_SCIENTIST" > data/original/Research_scientist.tex
+
+          echo "Data files created:"
+          ls -laR data/
+
+          # Verify main files are not empty
           echo ""
-          echo "File sizes:"
-          wc -l data/*.yaml
+          echo "File line counts:"
+          wc -l data/*.yaml data/resume_variants/*.yaml 2>/dev/null || true
+          wc -l data/original/*.tex 2>/dev/null || true
 
       - name: Debug - Check environment
         env:
