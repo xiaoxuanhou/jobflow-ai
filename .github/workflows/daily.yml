@@ -64,34 +64,68 @@ jobs:
           RESUME_TEX_OR_SCIENTIST: ${{ secrets.RESUME_TEX_OR_SCIENTIST }}
           RESUME_TEX_RESEARCH_SCIENTIST: ${{ secrets.RESUME_TEX_RESEARCH_SCIENTIST }}
         run: |
-          echo "Creating data files from secrets..."
+          echo "=== Creating data files from secrets ==="
+
+          # Check if required secrets are set
+          echo "Checking required secrets..."
+          echo "COMPANIES_YAML length: ${#COMPANIES_YAML}"
+          echo "CRITERIA_YAML length: ${#CRITERIA_YAML}"
+          echo "RESUME_YAML length: ${#RESUME_YAML}"
+
+          if [ -z "$COMPANIES_YAML" ]; then
+            echo "ERROR: COMPANIES_YAML secret is empty or not set!"
+            echo "Please add the secret in GitHub: Settings > Secrets > Actions > New repository secret"
+            exit 1
+          fi
+
+          if [ -z "$CRITERIA_YAML" ]; then
+            echo "ERROR: CRITERIA_YAML secret is empty or not set!"
+            exit 1
+          fi
+
+          if [ -z "$RESUME_YAML" ]; then
+            echo "ERROR: RESUME_YAML secret is empty or not set!"
+            exit 1
+          fi
+
           mkdir -p data/original data/resume_variants
 
           # Write YAML config files
-          echo "$COMPANIES_YAML" > data/companies.yaml
-          echo "$CRITERIA_YAML" > data/criteria.yaml
-          echo "$RESUME_YAML" > data/resume.yaml
+          printf '%s\n' "$COMPANIES_YAML" > data/companies.yaml
+          printf '%s\n' "$CRITERIA_YAML" > data/criteria.yaml
+          printf '%s\n' "$RESUME_YAML" > data/resume.yaml
 
           # Write variant meta (if provided)
           if [ -n "$VARIANT_META_YAML" ]; then
-            echo "$VARIANT_META_YAML" > data/resume_variants/meta.yaml
+            printf '%s\n' "$VARIANT_META_YAML" > data/resume_variants/meta.yaml
+            echo "Created: data/resume_variants/meta.yaml"
           fi
 
           # Write .tex resume variants (if provided)
-          [ -n "$RESUME_TEX_APPLIED_AI" ] && echo "$RESUME_TEX_APPLIED_AI" > data/original/Applied_AI.tex
-          [ -n "$RESUME_TEX_AI_SAFETY" ] && echo "$RESUME_TEX_AI_SAFETY" > data/original/AI_safety.tex
-          [ -n "$RESUME_TEX_INDUSTRY_BALANCED" ] && echo "$RESUME_TEX_INDUSTRY_BALANCED" > data/original/industry_balanced.tex
-          [ -n "$RESUME_TEX_OR_SCIENTIST" ] && echo "$RESUME_TEX_OR_SCIENTIST" > data/original/OR_scientist.tex
-          [ -n "$RESUME_TEX_RESEARCH_SCIENTIST" ] && echo "$RESUME_TEX_RESEARCH_SCIENTIST" > data/original/Research_scientist.tex
+          [ -n "$RESUME_TEX_APPLIED_AI" ] && printf '%s\n' "$RESUME_TEX_APPLIED_AI" > data/original/Applied_AI.tex && echo "Created: Applied_AI.tex"
+          [ -n "$RESUME_TEX_AI_SAFETY" ] && printf '%s\n' "$RESUME_TEX_AI_SAFETY" > data/original/AI_safety.tex && echo "Created: AI_safety.tex"
+          [ -n "$RESUME_TEX_INDUSTRY_BALANCED" ] && printf '%s\n' "$RESUME_TEX_INDUSTRY_BALANCED" > data/original/industry_balanced.tex && echo "Created: industry_balanced.tex"
+          [ -n "$RESUME_TEX_OR_SCIENTIST" ] && printf '%s\n' "$RESUME_TEX_OR_SCIENTIST" > data/original/OR_scientist.tex && echo "Created: OR_scientist.tex"
+          [ -n "$RESUME_TEX_RESEARCH_SCIENTIST" ] && printf '%s\n' "$RESUME_TEX_RESEARCH_SCIENTIST" > data/original/Research_scientist.tex && echo "Created: Research_scientist.tex"
 
-          echo "Data files created:"
+          echo ""
+          echo "=== Verifying created files ==="
           ls -laR data/
 
-          # Verify main files are not empty
           echo ""
-          echo "File line counts:"
+          echo "=== File line counts ==="
           wc -l data/*.yaml data/resume_variants/*.yaml 2>/dev/null || true
           wc -l data/original/*.tex 2>/dev/null || true
+
+          echo ""
+          echo "=== Verify companies.yaml exists and has content ==="
+          if [ -f "data/companies.yaml" ]; then
+            echo "File exists. First 5 lines:"
+            head -5 data/companies.yaml
+          else
+            echo "ERROR: data/companies.yaml does not exist after creation!"
+            exit 1
+          fi
 
       - name: Debug - Check environment
         env:
