@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 env:
-  DAILY_BUDGET: '0.75'  # Default daily budget in USD
+  DAILY_BUDGET: '2.00'  # Default daily budget in USD
 
 jobs:
   discover-and-process:
