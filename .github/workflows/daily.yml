@@ -17,25 +17,73 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set date
+        id: date
+        run: echo "today=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Debug - Python info
+        run: |
+          echo "=== Python Version ==="
+          python --version
+          which python
+          echo ""
+          echo "=== Pip Version ==="
+          pip --version
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          echo ""
+          echo "=== Installed Packages ==="
+          pip list
 
       - name: Install LibreOffice (for PDF conversion)
         run: |
           sudo apt-get update
           sudo apt-get install -y libreoffice-writer
+          echo ""
+          echo "=== LibreOffice Version ==="
+          libreoffice --version || echo "LibreOffice version check failed"
 
-      - name: Set date
-        id: date
-        run: echo "today=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+      - name: Debug - Check environment
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "=== Working Directory ==="
+          pwd
+          echo ""
+          echo "=== Directory Contents ==="
+          ls -la
+          echo ""
+          echo "=== Data Directory ==="
+          ls -la data/ || echo "data/ not found"
+          echo ""
+          echo "=== API Key Check ==="
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is set (length: ${#ANTHROPIC_API_KEY})"
+          else
+            echo "ERROR: ANTHROPIC_API_KEY is NOT set!"
+          fi
+          echo ""
+          echo "=== Test Python Imports ==="
+          python -c "import anthropic; print(f'anthropic version: {anthropic.__version__}')"
+          python -c "import yaml; print('yaml OK')"
+          python -c "import jinja2; print('jinja2 OK')"
+          echo ""
+          echo "=== Test Module Imports ==="
+          python -c "from budget import BudgetTracker; print('budget OK')"
+          python -c "from utils import load_yaml; print('utils OK')"
+          python -c "from discover import discover_jobs; print('discover OK')"
+          python -c "from filter import apply_rule_filter; print('filter OK')"
+          python -c "from rank import rank_jobs_consistently; print('rank OK')"
+          python -c "from process import process_job; print('process OK')"
 
       - name: Run jobflow-ai
         id: discover
@@ -43,29 +91,49 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         continue-on-error: true
         run: |
-          # Run discovery with budget limit
+          echo "=== Starting jobflow-ai ==="
+          echo "Date: ${{ steps.date.outputs.today }}"
+          echo "Budget: ${{ vars.DAILY_BUDGET || env.DAILY_BUDGET }}"
+          echo ""
+
+          # Run discovery with budget limit and capture output
+          set +e  # Don't exit on error
           python main.py discover --process \
             --max-cost ${{ vars.DAILY_BUDGET || env.DAILY_BUDGET }} \
             --output outputs/ 2>&1 | tee jobflow.log
+          EXIT_CODE=$?
+          set -e
 
-          # Store exit code
-          EXIT_CODE=${PIPESTATUS[0]}
+          echo ""
+          echo "=== Exit Code: $EXIT_CODE ==="
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          # List output files
+          echo ""
+          echo "=== Output Directory Contents ==="
+          ls -laR outputs/ || echo "outputs/ directory not found or empty"
 
           # Check if we processed any jobs
           TODAY=${{ steps.date.outputs.today }}
           if [ -f "outputs/$TODAY/daily_summary.md" ]; then
-            # Count processed jobs from summary
             COUNT=$(grep -c "^###" "outputs/$TODAY/daily_summary.md" || echo "0")
             echo "count=$COUNT" >> $GITHUB_OUTPUT
             echo "has_results=true" >> $GITHUB_OUTPUT
+            echo "Found $COUNT jobs in summary"
           else
             echo "count=0" >> $GITHUB_OUTPUT
             echo "has_results=false" >> $GITHUB_OUTPUT
+            echo "No daily_summary.md found"
           fi
 
-          # Exit with original code
+          # Exit with original code (but workflow continues due to continue-on-error)
           exit $EXIT_CODE
+
+      - name: Debug - Show log tail on failure
+        if: failure() || steps.discover.outputs.exit_code != '0'
+        run: |
+          echo "=== Last 100 lines of jobflow.log ==="
+          tail -100 jobflow.log || echo "No log file found"
 
       - name: Upload results
         if: always()
@@ -88,7 +156,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Send email notification
-        if: steps.discover.outputs.has_results == 'true' && steps.discover.outputs.count > 0
+        if: steps.discover.outputs.has_results == 'true' && steps.discover.outputs.count != '0'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -109,10 +177,19 @@ jobs:
           echo "## jobflow-ai Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Date**: ${{ steps.date.outputs.today }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Exit Code**: ${{ steps.discover.outputs.exit_code }}" >> $GITHUB_STEP_SUMMARY
           echo "**Jobs Processed**: ${{ steps.discover.outputs.count }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          if [ -f "jobflow.log" ]; then
+            echo "### Execution Log (last 50 lines)" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            tail -50 jobflow.log >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
           if [ -f "outputs/${{ steps.date.outputs.today }}/budget_log.json" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Budget" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
             cat "outputs/${{ steps.date.outputs.today }}/budget_log.json" >> $GITHUB_STEP_SUMMARY
@@ -121,6 +198,6 @@ jobs:
 
           if [ -f "outputs/${{ steps.date.outputs.today }}/daily_summary.md" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            echo "### Daily Summary" >> $GITHUB_STEP_SUMMARY
             cat "outputs/${{ steps.date.outputs.today }}/daily_summary.md" >> $GITHUB_STEP_SUMMARY
           fi
