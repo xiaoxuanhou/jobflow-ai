@@ -11,6 +11,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import anthropic
+
 from budget import BudgetTracker, BudgetExceededError, COSTS
 from utils import load_yaml, save_json, generate_daily_summary
 
@@ -26,12 +28,6 @@ def cmd_process(args):
         sys.exit(1)
 
     resume = load_yaml(str(resume_path))
-
-    # Load template
-    template_path = Path(args.template)
-    if not template_path.exists():
-        print(f"Error: Template file not found: {template_path}")
-        sys.exit(1)
 
     # Get job description
     if args.job_url:
@@ -72,7 +68,6 @@ def cmd_process(args):
             job_description=job_description,
             job_url=job_url,
             resume=resume,
-            template_path=str(template_path),
             budget_tracker=tracker,
             output_dir=args.output,
             skip_profiles=args.skip_profiles
@@ -159,6 +154,11 @@ def cmd_discover(args):
         if args.dry_run:
             print("  Would apply rule-based filters (free)")
         else:
+            if not jobs:
+                print("  No jobs to filter - skipping remaining stages")
+                tracker.save_log(args.output)
+                return
+
             passed_jobs, rejected = apply_rule_filter(jobs, criteria)
             tracker.add("rule_filter", 0.0, {"passed": len(passed_jobs), "rejected": len(rejected)})
             print(f"  Passed: {len(passed_jobs)}, Rejected: {len(rejected)}")
@@ -169,6 +169,11 @@ def cmd_discover(args):
         if args.dry_run:
             print(f"  Estimated cost: ${filter_cost:.2f}")
         else:
+            if not passed_jobs:
+                print("  No jobs passed rule filter - skipping remaining stages")
+                tracker.save_log(args.output)
+                return
+
             if not tracker.can_afford("ai_filter", filter_cost):
                 tracker.abort(f"Cannot afford AI filter (need ${filter_cost:.2f})")
 
@@ -182,6 +187,11 @@ def cmd_discover(args):
         if args.dry_run:
             print(f"  Estimated cost: ${ranking_cost:.2f}")
         else:
+            if not viable_jobs:
+                print("  No viable jobs to rank - skipping remaining stages")
+                tracker.save_log(args.output)
+                return
+
             if not tracker.can_afford("ranking", ranking_cost):
                 tracker.abort(f"Cannot afford ranking (need ${ranking_cost:.2f})")
 
@@ -203,14 +213,23 @@ def cmd_discover(args):
                 print(f"  Estimated cost: ${max_jobs * COSTS['process_per_job']:.2f}")
             else:
                 from process import process_job
+                from discover import fetch_job_details
 
-                template_path = Path(args.template)
-                if not template_path.exists():
-                    print(f"Error: Template file not found: {template_path}")
-                    sys.exit(1)
+                if not ranked_jobs:
+                    print("  No jobs to process")
+                    tracker.save_log(args.output)
+                    return
 
                 top_jobs = ranked_jobs[:max_jobs]
                 print(f"\nStage 5: Processing top {len(top_jobs)} jobs...")
+
+                # First, fetch full descriptions for jobs that don't have them
+                print(f"  Fetching full job descriptions...")
+                jobs_client = anthropic.Anthropic()
+                for job in top_jobs:
+                    if not job.get('description') or len(job.get('description', '')) < 500:
+                        print(f"    Fetching: {job.get('title', 'Unknown')} @ {job.get('company', 'Unknown')}")
+                        fetch_job_details(jobs_client, job, tracker)
 
                 results = []
                 for i, job in enumerate(top_jobs, 1):
@@ -219,15 +238,22 @@ def cmd_discover(args):
                         print(f"  Budget limit reached. Processed {i-1} of {len(top_jobs)} jobs.")
                         break
 
-                    print(f"  [{i}] Processing: {job.get('role', 'Unknown')} @ {job.get('company', 'Unknown')}")
+                    # Use description or fall back to preview
+                    job_desc = job.get('description') or job.get('description_preview', '')
+                    if not job_desc:
+                        print(f"  [{i}] Skipping {job.get('title', 'Unknown')} @ {job.get('company', 'Unknown')} - no description")
+                        continue
+
+                    print(f"  [{i}] Processing: {job.get('title', 'Unknown')} @ {job.get('company', 'Unknown')}")
                     result = process_job(
-                        job_description=job['description'],
-                        job_url=job['url'],
+                        job_description=job_desc,
+                        job_url=job.get('url', ''),
                         resume=resume,
-                        template_path=str(template_path),
                         budget_tracker=tracker,
                         output_dir=args.output,
-                        skip_profiles=args.skip_profiles
+                        skip_profiles=args.skip_profiles,
+                        company=job.get('company'),
+                        role_title=job.get('title')
                     )
                     results.append(result)
                     print(f"      Cost: ${result['cost']:.4f}")
@@ -335,7 +361,7 @@ def main():
     process_parser.add_argument('--job-url', help='URL of job posting to fetch and process')
     process_parser.add_argument('--job-file', help='Path to file containing job description')
     process_parser.add_argument('--resume', default='data/resume.yaml', help='Path to resume YAML')
-    process_parser.add_argument('--template', default='data/templates/resume.tex.j2', help='Path to LaTeX template')
+    process_parser.add_argument('--template', default=None, help='Deprecated - DOCX is now generated directly')
     process_parser.add_argument('--output', default='outputs', help='Output directory')
     process_parser.add_argument('--max-cost', type=float, help='Maximum cost in USD')
     process_parser.add_argument('--skip-profiles', action='store_true', help='Skip LinkedIn profile search')
@@ -347,7 +373,7 @@ def main():
     discover_parser.add_argument('--criteria', default='data/criteria.yaml', help='Path to criteria YAML')
     discover_parser.add_argument('--companies', default='data/companies.yaml', help='Path to companies YAML')
     discover_parser.add_argument('--resume', default='data/resume.yaml', help='Path to resume YAML')
-    discover_parser.add_argument('--template', default='data/templates/resume.tex.j2', help='Path to LaTeX template')
+    discover_parser.add_argument('--template', default=None, help='Deprecated - DOCX is now generated directly')
     discover_parser.add_argument('--output', default='outputs', help='Output directory')
     discover_parser.add_argument('--cache', default='cache', help='Cache directory')
     discover_parser.add_argument('--max-cost', type=float, help='Maximum cost in USD')

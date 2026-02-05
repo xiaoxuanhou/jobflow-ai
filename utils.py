@@ -1,18 +1,24 @@
 """
 Utility functions for jobflow-ai.
 
-Handles LaTeX rendering, PDF compilation, file output, and debugging.
+Handles DOCX rendering, PDF conversion, file output, and debugging.
 """
 
 import json
+import logging
 import re
-import subprocess
-import shutil
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
 
-from jinja2 import Environment, FileSystemLoader, BaseLoader
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.style import WD_STYLE_TYPE
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+logger = logging.getLogger(__name__)
 
 
 def slugify(text: str) -> str:
@@ -39,249 +45,360 @@ def slugify(text: str) -> str:
     return text[:60]
 
 
-def latex_escape(text: str) -> str:
+# =============================================================================
+# DOCX Rendering Functions
+# =============================================================================
+
+
+def _add_horizontal_rule(paragraph):
+    """Add a horizontal rule (bottom border) below a paragraph."""
+    pPr = paragraph._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '6')  # 1/8 pt
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), '000000')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+
+def _add_hyperlink(paragraph, text: str, url: str):
+    """Add a hyperlink to a paragraph."""
+    part = paragraph.part
+    r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+
+    new_run = OxmlElement('w:r')
+    rPr = OxmlElement('w:rPr')
+
+    # Blue color
+    color = OxmlElement('w:color')
+    color.set(qn('w:val'), '004F90')
+    rPr.append(color)
+
+    # Underline
+    u = OxmlElement('w:u')
+    u.set(qn('w:val'), 'single')
+    rPr.append(u)
+
+    new_run.append(rPr)
+
+    text_elem = OxmlElement('w:t')
+    text_elem.text = text
+    new_run.append(text_elem)
+
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
+
+
+def _format_text_with_bold(paragraph, text: str, base_bold: bool = False):
     """
-    Escape special LaTeX characters in text.
+    Format text with **bold** markdown converted to actual bold.
 
     Args:
-        text: Raw text that may contain special characters
-
-    Returns:
-        LaTeX-safe escaped text
+        paragraph: The paragraph to add text to
+        text: Text that may contain **bold** markers
+        base_bold: Whether the base text should be bold
     """
-    if not isinstance(text, str):
-        text = str(text)
+    # Split on **bold** markers
+    parts = re.split(r'\*\*([^*]+)\*\*', text)
 
-    # Order matters: escape backslash first
-    replacements = [
-        ('\\', r'\textbackslash{}'),
-        ('&', r'\&'),
-        ('%', r'\%'),
-        ('$', r'\$'),
-        ('#', r'\#'),
-        ('_', r'\_'),
-        ('{', r'\{'),
-        ('}', r'\}'),
-        ('~', r'\textasciitilde{}'),
-        ('^', r'\textasciicircum{}'),
-    ]
-
-    for char, escaped in replacements:
-        text = text.replace(char, escaped)
-
-    return text
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        run = paragraph.add_run(part)
+        # Odd indices are the bold parts (between **)
+        if i % 2 == 1 or base_bold:
+            run.bold = True
 
 
-def postprocess_latex(content: str) -> str:
+def render_docx(tailored_content: dict, output_path: str) -> str:
     """
-    Post-process rendered LaTeX to fix common issues.
-
-    - Convert markdown bold **text** to LaTeX \\textbf{text}
-    - Escape unescaped special characters
+    Generate a DOCX resume from tailored content.
 
     Args:
-        content: Raw rendered LaTeX string
+        tailored_content: Dict with contact, summary, experiences, education, skills, publications
+        output_path: Path to save the .docx file
 
     Returns:
-        Fixed LaTeX string
+        Path to generated .docx file
     """
-    # Convert markdown bold **text** to \textbf{text}
-    content = re.sub(r'\*\*([^*]+)\*\*', r'\\textbf{\1}', content)
+    doc = Document()
 
-    # Fix unescaped & (but not already escaped \&)
-    # Look for & not preceded by \
-    content = re.sub(r'(?<!\\)&', r'\\&', content)
+    # Set default font
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Calibri'
+    font.size = Pt(10)
 
-    # Fix unescaped % (but not already escaped \% or in comments)
-    # This is tricky - only fix % that's not at line start (LaTeX comments)
-    lines = content.split('\n')
-    fixed_lines = []
-    for line in lines:
-        if not line.strip().startswith('%'):
-            # Fix unescaped % not at start of line
-            line = re.sub(r'(?<!\\)%(?!%)', r'\\%', line)
-        fixed_lines.append(line)
-    content = '\n'.join(fixed_lines)
+    # Set narrow margins
+    for section in doc.sections:
+        section.top_margin = Inches(0.5)
+        section.bottom_margin = Inches(0.5)
+        section.left_margin = Inches(0.5)
+        section.right_margin = Inches(0.5)
 
-    # Fix unescaped $ (but not already escaped \$)
-    content = re.sub(r'(?<!\\)\$', r'\\$', content)
+    contact = tailored_content.get('contact', {})
+    summary = tailored_content.get('summary', '')
+    experiences = tailored_content.get('experiences', [])
+    education = tailored_content.get('education', [])
+    skills = tailored_content.get('skills', [])
+    publications = tailored_content.get('publications', [])
 
-    return content
+    # =========================================================================
+    # HEADER - Name (centered, large, bold)
+    # =========================================================================
+    name_para = doc.add_paragraph()
+    name_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    name_run = name_para.add_run(contact.get('name', ''))
+    name_run.bold = True
+    name_run.font.size = Pt(24)
 
+    # Contact info on one line with separators
+    contact_para = doc.add_paragraph()
+    contact_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-def render_latex(tailored_content: dict, template_path: str) -> str:
-    """
-    Render LaTeX resume using Jinja2 template.
+    contact_items = []
+    if contact.get('email'):
+        contact_items.append(('email', contact['email']))
+    if contact.get('phone'):
+        contact_items.append(('text', contact['phone']))
+    if contact.get('linkedin'):
+        contact_items.append(('link', 'LinkedIn', contact['linkedin']))
+    if contact.get('github'):
+        contact_items.append(('link', 'GitHub', contact['github']))
+    if contact.get('work_authorization'):
+        contact_items.append(('text', contact['work_authorization']))
 
-    Args:
-        tailored_content: Dict with tailored resume content
-        template_path: Path to the .tex.j2 template
+    for i, item in enumerate(contact_items):
+        if i > 0:
+            contact_para.add_run(' | ')
 
-    Returns:
-        Rendered LaTeX string
-    """
-    template_path = Path(template_path)
-
-    try:
-        env = Environment(
-            loader=FileSystemLoader(str(template_path.parent)),
-            # Use different delimiters to avoid LaTeX conflicts
-            block_start_string='<%',
-            block_end_string='%>',
-            variable_start_string='<<',
-            variable_end_string='>>',
-            comment_start_string='<#',
-            comment_end_string='#>',
-            autoescape=False,
-        )
-
-        # Add custom filter for LaTeX escaping
-        env.filters['latex_escape'] = latex_escape
-
-        template = env.get_template(template_path.name)
-        rendered = template.render(**tailored_content)
-
-        # Post-process to fix markdown and special characters
-        return postprocess_latex(rendered)
-    except Exception as e:
-        # Print more debug info
-        print(f"  Debug: Template path = {template_path}")
-        print(f"  Debug: Template exists = {template_path.exists()}")
-        print(f"  Debug: Error type = {type(e).__name__}")
-        print(f"  Debug: Error = {e}")
-        raise
-
-
-def render_latex_from_string(tailored_content: dict, template_string: str) -> str:
-    """
-    Render LaTeX resume from a template string.
-
-    Args:
-        tailored_content: Dict with tailored resume content
-        template_string: Template as a string
-
-    Returns:
-        Rendered LaTeX string
-    """
-    env = Environment(
-        loader=BaseLoader(),
-        block_start_string='<%',
-        block_end_string='%>',
-        variable_start_string='<<',
-        variable_end_string='>>',
-        comment_start_string='<#',
-        comment_end_string='#>',
-    )
-    template = env.from_string(template_string)
-    return template.render(**tailored_content)
-
-
-def find_latex_compiler() -> Optional[str]:
-    """
-    Find an available LaTeX compiler.
-
-    Returns:
-        Full path to the compiler or None
-    """
-    import os
-
-    compilers = ['pdflatex', 'xelatex', 'lualatex']
-
-    # First check if any compiler is in PATH
-    for compiler in compilers:
-        path = shutil.which(compiler)
-        if path:
-            return path
-
-    # On Windows, check common MiKTeX installation locations
-    if os.name == 'nt':
-        user_home = os.path.expanduser('~')
-        miktex_paths = [
-            os.path.join(user_home, 'AppData', 'Local', 'Programs', 'MiKTeX', 'miktex', 'bin', 'x64'),
-            os.path.join(user_home, 'AppData', 'Local', 'MiKTeX', 'miktex', 'bin', 'x64'),
-            r'C:\Program Files\MiKTeX\miktex\bin\x64',
-            r'C:\MiKTeX\miktex\bin\x64',
-        ]
-
-        for miktex_path in miktex_paths:
-            for compiler in compilers:
-                full_path = os.path.join(miktex_path, f'{compiler}.exe')
-                if os.path.isfile(full_path):
-                    return full_path
-
-    return None
-
-
-def compile_pdf(tex_path: str, output_dir: Optional[str] = None) -> Optional[str]:
-    """
-    Compile LaTeX to PDF using available compiler.
-
-    Args:
-        tex_path: Path to the .tex file
-        output_dir: Output directory (defaults to same as tex file)
-
-    Returns:
-        Path to the generated PDF, or None if compilation failed
-    """
-    tex_path = Path(tex_path).resolve()  # Get absolute path
-    output_dir = Path(output_dir).resolve() if output_dir else tex_path.parent
-
-    # Check for LaTeX compiler
-    compiler = find_latex_compiler()
-    if not compiler:
-        print("  Warning: No LaTeX compiler found (pdflatex, xelatex, or lualatex).")
-        print("  To generate PDFs, install LaTeX:")
-        print("    - Windows: https://miktex.org/download (MiKTeX)")
-        print("    - Mac: brew install --cask mactex")
-        print("    - Linux: sudo apt install texlive-latex-recommended")
-        print(f"  Your .tex file is saved at: {tex_path}")
-        return None
-
-    try:
-        # Run compiler twice for proper references
-        # Use just the filename since we set cwd to the tex file's directory
-        tex_filename = tex_path.name
-        working_dir = tex_path.parent
-
-        for i in range(2):
-            result = subprocess.run(
-                [compiler, '-interaction=nonstopmode', tex_filename],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=str(working_dir)
-            )
-
-        pdf_path = working_dir / tex_path.with_suffix('.pdf').name
-        if pdf_path.exists():
-            # Clean up auxiliary files
-            for ext in ['.aux', '.log', '.out', '.toc', '.synctex.gz', '.fls', '.fdb_latexmk']:
-                aux_file = working_dir / tex_path.with_suffix(ext).name
-                if aux_file.exists():
-                    try:
-                        aux_file.unlink()
-                    except Exception:
-                        pass
-            return str(pdf_path)
+        if item[0] == 'email':
+            _add_hyperlink(contact_para, item[1], f"mailto:{item[1]}")
+        elif item[0] == 'link':
+            _add_hyperlink(contact_para, item[1], item[2])
         else:
-            # Check log for errors
-            log_path = working_dir / tex_path.with_suffix('.log').name
-            if log_path.exists():
-                log_content = log_path.read_text(encoding='utf-8', errors='ignore')
-                # Find first error
-                for line in log_content.split('\n'):
-                    if line.startswith('!'):
-                        print(f"  LaTeX error: {line}")
-                        break
-            print(f"  Warning: PDF compilation failed. Check {tex_path.stem}.log for details.")
-            return None
+            contact_para.add_run(item[1])
 
-    except subprocess.TimeoutExpired:
-        print("  Warning: PDF compilation timed out (>120s).")
+    # =========================================================================
+    # SUMMARY - Centered, italicized
+    # =========================================================================
+    if summary:
+        summary_para = doc.add_paragraph()
+        summary_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        summary_run = summary_para.add_run(summary)
+        summary_run.italic = True
+
+    # =========================================================================
+    # PROFESSIONAL EXPERIENCE
+    # =========================================================================
+    if experiences:
+        section_para = doc.add_paragraph()
+        section_run = section_para.add_run('PROFESSIONAL EXPERIENCE')
+        section_run.bold = True
+        section_run.font.size = Pt(12)
+        _add_horizontal_rule(section_para)
+
+        for exp in experiences:
+            # Role, Company (right-aligned dates) using a table
+            table = doc.add_table(rows=1, cols=2)
+            table.autofit = True
+            table.allow_autofit = True
+
+            left_cell = table.rows[0].cells[0]
+            right_cell = table.rows[0].cells[1]
+
+            # Left: Role, Company
+            left_para = left_cell.paragraphs[0]
+            role_run = left_para.add_run(exp.get('role', ''))
+            role_run.bold = True
+            left_para.add_run(f", {exp.get('company', '')}")
+
+            # Right: Dates
+            right_para = right_cell.paragraphs[0]
+            right_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            date_str = exp.get('start_date', '')
+            if exp.get('end_date') and exp.get('end_date') != exp.get('start_date'):
+                date_str += f" – {exp.get('end_date', '')}"
+            right_para.add_run(date_str)
+
+            # Location (italic)
+            if exp.get('location'):
+                loc_para = doc.add_paragraph()
+                loc_run = loc_para.add_run(exp.get('location', ''))
+                loc_run.italic = True
+
+            # Bullet points
+            for bullet in exp.get('bullets', []):
+                bullet_para = doc.add_paragraph(style='List Bullet')
+                _format_text_with_bold(bullet_para, bullet)
+
+    # =========================================================================
+    # EDUCATION
+    # =========================================================================
+    if education:
+        section_para = doc.add_paragraph()
+        section_run = section_para.add_run('EDUCATION')
+        section_run.bold = True
+        section_run.font.size = Pt(12)
+        _add_horizontal_rule(section_para)
+
+        for edu in education:
+            # Institution (right-aligned location)
+            table = doc.add_table(rows=1, cols=2)
+            table.autofit = True
+
+            left_cell = table.rows[0].cells[0]
+            right_cell = table.rows[0].cells[1]
+
+            left_para = left_cell.paragraphs[0]
+            inst_run = left_para.add_run(edu.get('institution', ''))
+            inst_run.bold = True
+
+            right_para = right_cell.paragraphs[0]
+            right_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            right_para.add_run(edu.get('location', ''))
+
+            # Degree (right-aligned graduation)
+            table2 = doc.add_table(rows=1, cols=2)
+            table2.autofit = True
+
+            left_cell2 = table2.rows[0].cells[0]
+            right_cell2 = table2.rows[0].cells[1]
+
+            left_para2 = left_cell2.paragraphs[0]
+            degree_run = left_para2.add_run(edu.get('degree', ''))
+            degree_run.italic = True
+            if edu.get('focus'):
+                left_para2.add_run(f" (focus: {edu.get('focus')})")
+
+            right_para2 = right_cell2.paragraphs[0]
+            right_para2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            right_para2.add_run(edu.get('graduation', ''))
+
+            # Advisors
+            if edu.get('advisors'):
+                advisors_para = doc.add_paragraph()
+                advisors_para.add_run('Advisors: ')
+                advisors_para.add_run(', '.join(edu.get('advisors', [])))
+
+    # =========================================================================
+    # SELECTED PUBLICATIONS
+    # =========================================================================
+    if publications:
+        section_para = doc.add_paragraph()
+        section_run = section_para.add_run('SELECTED PUBLICATIONS')
+        section_run.bold = True
+        section_run.font.size = Pt(12)
+        _add_horizontal_rule(section_para)
+
+        for pub in publications:
+            pub_para = doc.add_paragraph(style='List Bullet')
+
+            # First author indicator
+            if pub.get('first_author'):
+                fa_run = pub_para.add_run('First-author ')
+                fa_run.bold = True
+
+            # Status and venue
+            status_text = f"({pub.get('status', '')}"
+            if pub.get('venue'):
+                status_text += f", "
+                pub_para.add_run(status_text)
+                venue_run = pub_para.add_run(pub.get('venue'))
+                venue_run.italic = True
+                pub_para.add_run('): ')
+            else:
+                pub_para.add_run(status_text + '): ')
+
+            # Title
+            pub_para.add_run(pub.get('short_title', ''))
+
+            # Link
+            if pub.get('url'):
+                pub_para.add_run(' [')
+                _add_hyperlink(pub_para, pub.get('url_label', 'Link'), pub.get('url'))
+                pub_para.add_run(']')
+
+    # =========================================================================
+    # TECHNICAL SKILLS
+    # =========================================================================
+    if skills:
+        section_para = doc.add_paragraph()
+        section_run = section_para.add_run('TECHNICAL SKILLS')
+        section_run.bold = True
+        section_run.font.size = Pt(12)
+        _add_horizontal_rule(section_para)
+
+        for category in skills:
+            skill_para = doc.add_paragraph()
+            cat_run = skill_para.add_run(f"{category.get('name', '')}:")
+            cat_run.bold = True
+            skill_para.add_run(' ')
+            skill_list = category.get('skill_list', [])
+            if isinstance(skill_list, list):
+                skill_para.add_run(', '.join(skill_list))
+            else:
+                skill_para.add_run(str(skill_list))
+
+    # Save document
+    doc.save(output_path)
+    return output_path
+
+
+def convert_to_pdf(docx_path: str) -> Optional[str]:
+    """
+    Convert DOCX to PDF using docx2pdf.
+
+    Uses Word on Windows, LibreOffice on Linux/Mac.
+
+    Args:
+        docx_path: Path to the .docx file
+
+    Returns:
+        Path to PDF if successful, None otherwise
+    """
+    try:
+        from docx2pdf import convert
+        pdf_path = docx_path.replace('.docx', '.pdf')
+        convert(docx_path, pdf_path)
+        return pdf_path
+    except ImportError:
+        logger.warning("docx2pdf not installed. Install with: pip install docx2pdf")
         return None
     except Exception as e:
-        print(f"  Warning: PDF compilation error: {e}")
+        logger.error(f"PDF conversion failed: {e}")
+        logger.info("On Windows, ensure Microsoft Word is installed.")
+        logger.info("On Linux/Mac, ensure LibreOffice is installed.")
         return None
+
+
+def extract_text_from_docx(docx_path: str) -> str:
+    """
+    Extract all text content from a DOCX file.
+
+    Args:
+        docx_path: Path to the .docx file
+
+    Returns:
+        Extracted text content
+    """
+    doc = Document(docx_path)
+    text_parts = []
+
+    for para in doc.paragraphs:
+        text_parts.append(para.text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                text_parts.append(cell.text)
+
+    return '\n'.join(text_parts)
 
 
 def render_outreach_md(targets: list, scripts: dict, company: str, role: str) -> str:
@@ -441,7 +558,7 @@ def generate_daily_summary(results: list, output_dir: str) -> str:
         # Files generated
         job_slug = result.get('slug', slugify(f"{company}-{role}"))
         lines.extend([
-            f"**Files**: `{job_slug}/resume.tex`, `{job_slug}/outreach.md`",
+            f"**Files**: `{job_slug}/resume.docx`, `{job_slug}/outreach.md`",
             "",
         ])
 
@@ -486,226 +603,6 @@ def save_json(data: dict, path: str) -> None:
 def load_json(path: str) -> dict:
     """Load a JSON file."""
     return json.loads(Path(path).read_text(encoding='utf-8'))
-
-
-# =============================================================================
-# LaTeX Editing Helpers (for variant-based resume tailoring)
-# =============================================================================
-
-def replace_summary_in_tex(tex_content: str, new_summary: str) -> str:
-    """
-    Replace the summary/tagline line in a LaTeX resume.
-
-    Looks for patterns like:
-    - \\begin{onecolentry}...summary text...\\end{onecolentry}
-    - Single-line summaries after header
-
-    Args:
-        tex_content: Original LaTeX content
-        new_summary: New summary text (plain text, will be escaped)
-
-    Returns:
-        Modified LaTeX content with new summary
-    """
-    if not new_summary:
-        return tex_content
-
-    # Pattern 1: onecolentry with centering (most common in the variants)
-    pattern1 = r'(\\begin\{onecolentry\}\s*\\centering\s*).+?(\s*\\end\{onecolentry\})'
-
-    # Check if pattern exists
-    if re.search(pattern1, tex_content, re.DOTALL):
-        return re.sub(
-            pattern1,
-            rf'\1{new_summary}\2',
-            tex_content,
-            count=1,
-            flags=re.DOTALL
-        )
-
-    # Pattern 2: onecolentry without centering but after header
-    pattern2 = r'(\\end\{header\}.*?\\begin\{onecolentry\}\s*).+?(\s*\\end\{onecolentry\})'
-
-    if re.search(pattern2, tex_content, re.DOTALL):
-        return re.sub(
-            pattern2,
-            rf'\1{new_summary}\2',
-            tex_content,
-            count=1,
-            flags=re.DOTALL
-        )
-
-    # Pattern 3: Summary in header (AI_safety format)
-    pattern3 = r'(\\begin\{header\}.*?\\begin\{onecolentry\}\s*\\centering\s*).+?(\s*\\end\{onecolentry\}.*?\\end\{header\})'
-
-    if re.search(pattern3, tex_content, re.DOTALL):
-        return re.sub(
-            pattern3,
-            rf'\1{new_summary}\2',
-            tex_content,
-            count=1,
-            flags=re.DOTALL
-        )
-
-    # If no pattern found, return unchanged
-    return tex_content
-
-
-def reorder_skills_in_tex(tex_content: str, skill_categories_order: list[str]) -> str:
-    """
-    Reorder skill categories in a LaTeX resume.
-
-    The variants use patterns like:
-    \\textbf{Category Name:}
-    skill1, skill2, skill3
-
-    Args:
-        tex_content: Original LaTeX content
-        skill_categories_order: Ordered list of category names to prioritize
-
-    Returns:
-        Modified LaTeX content with reordered skills
-    """
-    if not skill_categories_order:
-        return tex_content
-
-    # Find the skills section
-    skills_section_match = re.search(
-        r'(\\section\{(?:Technical )?Skills\})(.*?)(?=\\section\{|\\end\{document\}|$)',
-        tex_content,
-        re.DOTALL | re.IGNORECASE
-    )
-
-    if not skills_section_match:
-        return tex_content
-
-    section_header = skills_section_match.group(1)
-    section_content = skills_section_match.group(2)
-
-    # Extract individual skill blocks
-    # Pattern: \textbf{Category:} followed by content until next \textbf{ or section end
-    skill_pattern = r'(\\textbf\{([^}]+?)(?::|)\}\s*)(.*?)(?=\\textbf\{|\\section\{|$)'
-    skill_blocks = re.findall(skill_pattern, section_content, re.DOTALL)
-
-    if not skill_blocks:
-        return tex_content
-
-    # Build a dict of category -> (header, content)
-    skills_dict = {}
-    for header, category_name, content in skill_blocks:
-        # Normalize category name for matching
-        normalized = category_name.strip().lower().replace('&', 'and').replace(':', '')
-        skills_dict[normalized] = (header, content)
-
-    # Reorder based on priority list
-    new_blocks = []
-    used_categories = set()
-
-    # First, add categories in the specified order
-    for category in skill_categories_order:
-        normalized = category.strip().lower().replace('&', 'and').replace('_', ' ')
-        # Try to find a match
-        for key in skills_dict:
-            if normalized in key or key in normalized:
-                if key not in used_categories:
-                    header, content = skills_dict[key]
-                    new_blocks.append(f"{header}{content}")
-                    used_categories.add(key)
-                    break
-
-    # Then add remaining categories in original order
-    for key, (header, content) in skills_dict.items():
-        if key not in used_categories:
-            new_blocks.append(f"{header}{content}")
-
-    # Reconstruct section
-    new_section_content = '\n\n'.join(new_blocks)
-    new_section = f"{section_header}\n\n{new_section_content}"
-
-    # Replace in original content
-    result = tex_content[:skills_section_match.start()] + new_section
-    remaining = tex_content[skills_section_match.end():]
-    if remaining and not remaining.startswith('\n'):
-        result += '\n'
-    result += remaining
-
-    return result
-
-
-def add_skills_to_tex(tex_content: str, skills_to_add: list[str], category: str = "Additional") -> str:
-    """
-    Add new skills to the skills section.
-
-    Args:
-        tex_content: Original LaTeX content
-        skills_to_add: List of skills to add
-        category: Category name for the new skills
-
-    Returns:
-        Modified LaTeX content with added skills
-    """
-    if not skills_to_add:
-        return tex_content
-
-    # Find end of skills section
-    skills_section_match = re.search(
-        r'(\\section\{(?:Technical )?Skills\}.*?)(\\section\{|\\end\{document\}|$)',
-        tex_content,
-        re.DOTALL | re.IGNORECASE
-    )
-
-    if not skills_section_match:
-        return tex_content
-
-    section_content = skills_section_match.group(1)
-    next_section = skills_section_match.group(2)
-
-    # Add new skills block
-    skills_text = ', '.join(skills_to_add)
-    new_block = f"\n\n\\textbf{{{category}:}}\n{skills_text}\n"
-
-    # Insert before next section
-    new_content = section_content.rstrip() + new_block + '\n' + next_section
-
-    return tex_content[:skills_section_match.start()] + new_content + tex_content[skills_section_match.end():]
-
-
-def extract_section_from_tex(tex_content: str, section_name: str) -> Optional[str]:
-    """
-    Extract a section from LaTeX content.
-
-    Args:
-        tex_content: Full LaTeX content
-        section_name: Name of section to extract (e.g., "Experience", "Skills")
-
-    Returns:
-        Section content or None if not found
-    """
-    pattern = rf'\\section\{{{section_name}\}}(.*?)(?=\\section\{{|\\end\{{document\}}|$)'
-    match = re.search(pattern, tex_content, re.DOTALL | re.IGNORECASE)
-    return match.group(1).strip() if match else None
-
-
-def replace_section_in_tex(tex_content: str, section_name: str, new_content: str) -> str:
-    """
-    Replace a section in LaTeX content.
-
-    Args:
-        tex_content: Full LaTeX content
-        section_name: Name of section to replace
-        new_content: New section content (without \\section header)
-
-    Returns:
-        Modified LaTeX content
-    """
-    pattern = rf'(\\section\{{{section_name}\}})(.*?)((?=\\section\{{)|(?=\\end\{{document\}})|$)'
-
-    def replacer(match):
-        header = match.group(1)
-        next_part = match.group(3) if match.group(3) else ''
-        return f"{header}\n{new_content}\n{next_part}"
-
-    return re.sub(pattern, replacer, tex_content, flags=re.DOTALL | re.IGNORECASE)
 
 
 def get_output_dir(company: str, role: str, base_dir: str = "outputs") -> Path:

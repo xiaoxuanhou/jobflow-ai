@@ -15,21 +15,23 @@ import yaml
 
 from budget import BudgetTracker, estimate_cost, COSTS
 from utils import (
-    render_latex,
-    compile_pdf,
+    render_docx,
+    convert_to_pdf,
+    extract_text_from_docx,
     render_outreach_md,
     save_model_inputs,
     save_json,
     get_output_dir,
     slugify,
-    replace_summary_in_tex,
-    reorder_skills_in_tex,
-    add_skills_to_tex,
 )
 from variant_selector import (
     select_resume_variant,
     format_selection_summary,
     ResumeSelection,
+)
+from quality_gate import (
+    review_resume_as_recruiter,
+    format_review_summary,
 )
 
 
@@ -73,13 +75,24 @@ def build_tailoring_prompt(
         variant_context = f"""A resume variant has been PRE-SELECTED for this job:
 - Variant: {variant_selection.variant}
 - Selection method: {variant_selection.selection_method}
+- Ambiguity level: {variant_selection.ambiguity_level}
 - Existing summary line: {variant_selection.summary_line or 'None'}
 
 This variant provides the BASE STRUCTURE. Your task is MINIMAL, TARGETED modifications:
 1. Summary: Provide a new summary ONLY if the existing one needs significant adjustment
 2. Skills order: Provide priority order ONLY if reordering would improve relevance
-3. skills_to_add: List skills from YAML that are missing from the .tex but relevant to this job
+3. skills_to_add: List skills from YAML that are missing from the variant but relevant to this job
 4. DO NOT rewrite experience bullets - the variant's bullets are well-crafted"""
+
+        # Add tradeoff analysis for ambiguous cases
+        if variant_selection.ambiguity_level == "high" and variant_selection.tradeoff_analysis:
+            variant_context += f"""
+
+## Variant Selection Ambiguity Note
+This variant was selected from close alternatives. Consider these tradeoffs in your tailoring:
+{variant_selection.tradeoff_analysis}
+
+Where possible, incorporate strengths from alternative approaches while maintaining the selected variant's structure."""
     else:
         variant_context = """No variant selected - using YAML fallback.
 Generate full tailored content including reframed experience bullets."""
@@ -450,41 +463,24 @@ def build_render_data(resume: dict, tailored_content: dict) -> dict:
     }
 
 
-def generate_variant_based_resume(
-    variant_selection: ResumeSelection,
-    tailored_content: dict
+def generate_docx_resume(
+    resume: dict,
+    tailored_content: dict,
+    output_path: str
 ) -> str:
     """
-    Generate a resume by applying minimal modifications to a selected variant.
+    Generate a DOCX resume from YAML data and tailored content.
 
     Args:
-        variant_selection: The selected variant with .tex content
+        resume: Resume dict (from YAML)
         tailored_content: AI-generated tailoring suggestions
+        output_path: Path to save the .docx file
 
     Returns:
-        Modified LaTeX content
+        Path to generated .docx file
     """
-    if not variant_selection.tex_content:
-        raise ValueError("No tex content in variant selection")
-
-    latex_content = variant_selection.tex_content
-
-    # Apply summary change
-    new_summary = tailored_content.get('summary')
-    if new_summary:
-        latex_content = replace_summary_in_tex(latex_content, new_summary)
-
-    # Apply skills reordering
-    skills_order = tailored_content.get('skills_order', [])
-    if skills_order:
-        latex_content = reorder_skills_in_tex(latex_content, skills_order)
-
-    # Add supplemental skills
-    skills_to_add = tailored_content.get('skills_to_add', [])
-    if skills_to_add:
-        latex_content = add_skills_to_tex(latex_content, skills_to_add, "Additional")
-
-    return latex_content
+    render_data = build_render_data(resume, tailored_content)
+    return render_docx(render_data, output_path)
 
 
 # =============================================================================
@@ -495,12 +491,13 @@ def process_job(
     job_description: str,
     job_url: str,
     resume: dict,
-    template_path: str,
     budget_tracker: Optional[BudgetTracker] = None,
     output_dir: str = "outputs",
     skip_profiles: bool = False,
     skip_outreach: bool = False,
-    variant_meta_path: str = "data/resume_variants/meta.yaml"
+    variant_meta_path: str = "data/resume_variants/meta.yaml",
+    company: Optional[str] = None,
+    role_title: Optional[str] = None
 ) -> dict:
     """
     Process a single job: analyze, tailor resume, generate outreach.
@@ -509,20 +506,22 @@ def process_job(
         job_description: Full job description text
         job_url: URL of the job posting
         resume: Resume dict (from YAML)
-        template_path: Path to LaTeX template
         budget_tracker: Optional budget tracker
         output_dir: Base output directory
         skip_profiles: Skip LinkedIn profile search
         skip_outreach: Skip outreach generation entirely
         variant_meta_path: Path to variant metadata YAML
+        company: Optional company name (if known from discovery)
+        role_title: Optional role title (if known from discovery)
 
     Returns:
         Dict with all processing results
     """
     client = anthropic.Anthropic()
 
-    # Extract company name from job description
-    company = extract_company_name(job_description)
+    # Use provided company or extract from job description
+    if not company or company == "Unknown":
+        company = extract_company_name(job_description)
     total_cost = 0.0
 
     # =========================================================================
@@ -557,10 +556,12 @@ def process_job(
     strategy = tailoring_result.get('strategy', {})
     tailored_content = tailoring_result.get('tailored_content', {})
 
-    # Get role from analysis
-    role = analysis.get('role', 'Unknown Role')
-    if not analysis.get('company'):
+    # Get role - prefer provided title, fall back to analysis
+    role = role_title if role_title else analysis.get('role', 'Unknown Role')
+    if not analysis.get('company') or analysis.get('company') == 'Unknown':
         analysis['company'] = company
+    if not analysis.get('role') or analysis.get('role') == 'Unknown':
+        analysis['role'] = role
 
     tailor_cost = estimate_cost(tailor_input, tailor_output, model="sonnet")
     total_cost += tailor_cost
@@ -572,33 +573,108 @@ def process_job(
     job_slug = slugify(f"{company}-{role}")
 
     # =========================================================================
-    # Step 4: Generate LaTeX resume
+    # Step 4: Generate DOCX resume
     # =========================================================================
-    tex_path = job_output_dir / "resume.tex"
-    use_variant = (
-        variant_selection
-        and variant_selection.variant
-        and variant_selection.tex_content
-    )
+    docx_path = job_output_dir / "resume.docx"
 
     try:
-        if use_variant:
-            latex_content = generate_variant_based_resume(variant_selection, tailored_content)
-            print(f"  Using variant: {variant_selection.variant}")
+        if variant_selection and variant_selection.variant:
+            print(f"  Using variant context: {variant_selection.variant}")
         else:
-            render_data = build_render_data(resume, tailored_content)
-            latex_content = render_latex(render_data, template_path)
-            print(f"  Using YAML fallback with template")
+            print(f"  Using YAML fallback")
 
-        tex_path.write_text(latex_content, encoding='utf-8')
-        print(f"  Generated: {tex_path}")
+        generate_docx_resume(resume, tailored_content, str(docx_path))
+        print(f"  Generated: {docx_path}")
 
-        pdf_path = compile_pdf(str(tex_path))
+        pdf_path = convert_to_pdf(str(docx_path))
         if pdf_path:
             print(f"  Generated: {pdf_path}")
     except Exception as e:
-        print(f"  Warning: LaTeX generation failed: {e}")
-        latex_content = None
+        print(f"  Warning: DOCX generation failed: {e}")
+
+    # =========================================================================
+    # Step 5: Quality Gate - Review resume as recruiter
+    # =========================================================================
+    quality_review = None
+    regenerated = False
+
+    if docx_path.exists():
+        print(f"  Running quality gate...")
+        try:
+            resume_text = extract_text_from_docx(str(docx_path))
+            quality_review = review_resume_as_recruiter(
+                resume_text=resume_text,
+                job_description=job_description,
+                company=company,
+                role=role,
+                client=client,
+                budget_tracker=budget_tracker,
+                threshold=60
+            )
+
+            review_cost = estimate_cost(
+                quality_review.raw_response.get('input_tokens', 1000),
+                quality_review.raw_response.get('output_tokens', 500),
+                model="sonnet"
+            ) if 'input_tokens' in quality_review.raw_response else 0.01
+            total_cost += review_cost
+
+            print(format_review_summary(quality_review))
+
+            # Auto-regenerate if score < 60 (max 1 retry)
+            if not quality_review.passes_threshold and quality_review.improvements:
+                print(f"  Score below threshold. Regenerating with improvements...")
+                regenerated = True
+
+                # Add improvements to tailoring context
+                improvement_context = "\n".join(
+                    f"- {imp}" for imp in quality_review.improvements[:5]
+                )
+
+                # Re-run tailoring with improvement context
+                enhanced_prompt = tailoring_prompt + f"""
+
+## Quality Improvement Required
+A recruiter review found the following issues. Address these in your tailored content:
+{improvement_context}
+
+Focus on making bullets more impactful with metrics and specific outcomes.
+"""
+
+                retry_result, retry_input, retry_output = call_claude(
+                    client, enhanced_prompt, budget_tracker, "tailoring_retry"
+                )
+
+                retry_tailored = retry_result.get('tailored_content', {})
+                retry_cost = estimate_cost(retry_input, retry_output, model="sonnet")
+                total_cost += retry_cost
+
+                # Regenerate DOCX
+                generate_docx_resume(resume, retry_tailored, str(docx_path))
+                print(f"  Regenerated: {docx_path}")
+
+                pdf_path = convert_to_pdf(str(docx_path))
+                if pdf_path:
+                    print(f"  Regenerated: {pdf_path}")
+
+                # Update tailored_content for saving
+                tailored_content = retry_tailored
+
+            # Save quality review
+            quality_path = job_output_dir / "quality_review.json"
+            save_json({
+                'overall_score': quality_review.overall_score,
+                'relevance': quality_review.relevance,
+                'impact': quality_review.impact,
+                'clarity': quality_review.clarity,
+                'specificity': quality_review.specificity,
+                'improvements': quality_review.improvements,
+                'passes_threshold': quality_review.passes_threshold,
+                'regenerated': regenerated,
+            }, str(quality_path))
+
+        except Exception as e:
+            print(f"  Warning: Quality review failed: {e}")
 
     # Save tailoring results
     tailored_path = job_output_dir / "tailored_content.json"
@@ -609,20 +685,20 @@ def process_job(
         'skills_to_add': tailored_content.get('skills_to_add', []),
         'experiences': tailored_content.get('experiences', []),
     }
-    if use_variant:
+    if variant_selection and variant_selection.variant:
         tailored_data['variant'] = {
             'name': variant_selection.variant,
             'method': variant_selection.selection_method,
-            'file_path': variant_selection.file_path,
         }
     else:
         tailored_data['variant'] = None
-        tailored_data['render_data'] = build_render_data(resume, tailored_content)
+    tailored_data['render_data'] = build_render_data(resume, tailored_content)
     save_json(tailored_data, str(tailored_path))
 
-    # Save analysis
+    # Save analysis (include job URL for reference)
     analysis_path = job_output_dir / "analysis.json"
-    save_json(analysis, str(analysis_path))
+    analysis_with_url = {**analysis, 'job_url': job_url}
+    save_json(analysis_with_url, str(analysis_path))
 
     # Save tailoring debug info
     save_model_inputs(
@@ -720,7 +796,13 @@ def process_job(
         'variant': {
             'name': variant_selection.variant if variant_selection else None,
             'method': variant_selection.selection_method if variant_selection else 'yaml_fallback',
+            'ambiguity': variant_selection.ambiguity_level if variant_selection else None,
         } if variant_selection else None,
+        'quality_review': {
+            'score': quality_review.overall_score if quality_review else None,
+            'passed': quality_review.passes_threshold if quality_review else None,
+            'regenerated': regenerated,
+        } if quality_review else None,
     }
 
 

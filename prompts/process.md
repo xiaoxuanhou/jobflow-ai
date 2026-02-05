@@ -35,7 +35,7 @@ Based on Step 1, make explicit decisions for how to tailor:
 - Which publications are relevant to this role? (list by topic/ID)
 - Format: Full citations (research roles) OR one-line highlights on key relevance of the research (applied roles)?
 - How many to include? (research: more detail on fewer; applied: brief mention of most relevant)
-- Publications to supplement from YAML? (relevant publications not in the .tex variant)
+- Publications to supplement from YAML? (relevant publications not in the variant)
 
 **Experience Strategy:**
 - Which experiences to emphasize vs. de-emphasize?
@@ -44,7 +44,7 @@ Based on Step 1, make explicit decisions for how to tailor:
 **Skills Strategy:**
 - Which skill categories should lead? (order by relevance to JD)
 - Any skills to omit? (irrelevant or potentially negative signal for this role)
-- Skills to supplement from YAML? (relevant skills not in the .tex variant)
+- Skills to supplement from YAML? (relevant skills not in the variant)
 
 **Summary Strategy:**
 - Keep the variant's existing summary, or write a new one?
@@ -60,7 +60,7 @@ Apply your Step 2 decisions to generate the `tailored_content` output.
 - The base structure is already good - make MINIMAL, TARGETED changes
 - Only provide `summary` if you decided to change it in Step 2 (otherwise null)
 - Only provide `skills_order` if reordering improves relevance
-- DO NOT rewrite experience bullets - the .tex variant is well-crafted
+- DO NOT rewrite experience bullets - the variant is well-crafted
 - Use `skills_to_add` for supplemental skills identified in Step 2
 
 **If using YAML fallback (no variant selected):**
@@ -122,8 +122,7 @@ Return a JSON object:
 - Example: "AI Safety & Policy Researcher | Agentic Systems, Multi-Agent Dynamics, Model Evaluation"
 
 **Text formatting:**
-- Use `**keyword**` for bold (converted to LaTeX later)
-- Avoid LaTeX commands in JSON output
+- Use `**keyword**` for bold (converted to bold in DOCX)
 - For dollar amounts: "1B+" not "$1B+"
 - For percentages: "95" not "95%"
 

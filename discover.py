@@ -98,19 +98,34 @@ def search_company_careers(
     titles_str = ", ".join(titles[:5])  # Limit titles in query
 
     # Step 1: Try company careers page
-    jobs = _search_careers_page(client, company_name, careers_url, titles_str)
+    jobs, status = _search_careers_page(client, company_name, careers_url, titles_str)
 
     if jobs:
         print(f"    Found {len(jobs)} jobs from careers page")
         return jobs
 
-    # Step 2: Careers page returned nothing - try LinkedIn fallback
-    print(f"    Careers page returned 0 jobs, trying LinkedIn...")
-    jobs = _search_linkedin_for_company(client, company_name, titles_str, budget_tracker)
+    # Step 2: Careers page returned nothing - show why and try LinkedIn fallback
+    # Determine if we should try LinkedIn based on the status
+    should_try_linkedin = status in [
+        "page_inaccessible",
+        "login_required",
+        "error",
+        "no_jobs_in_response",
+        "unknown",
+    ] or status.startswith("error:")
 
-    if jobs:
-        print(f"    Found {len(jobs)} jobs from LinkedIn")
+    if should_try_linkedin:
+        print(f"    Careers page issue ({status}), trying LinkedIn...")
+        jobs = _search_linkedin_for_company(client, company_name, titles_str, budget_tracker)
+
+        if jobs:
+            print(f"    Found {len(jobs)} jobs from LinkedIn")
+            return jobs
     else:
+        # Status indicates page was accessible but no matching/recent jobs
+        print(f"    Careers page: {status}")
+
+    if not jobs:
         print(f"    No jobs found for {company_name}")
 
     return jobs
@@ -121,8 +136,14 @@ def _search_careers_page(
     company_name: str,
     careers_url: str,
     titles_str: str
-) -> list[dict]:
-    """Try to search company's careers page directly."""
+) -> tuple[list[dict], str]:
+    """
+    Try to search company's careers page directly.
+
+    Returns:
+        Tuple of (jobs_list, status_message)
+        status_message explains why 0 jobs were found (if applicable)
+    """
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -134,7 +155,12 @@ def _search_careers_page(
 
 Look at their careers page: {careers_url}
 
-Return a JSON array of job postings found. For each job include:
+Return a JSON object with:
+1. "status": One of "found_jobs", "no_matching_jobs", "page_inaccessible", "login_required", "no_recent_jobs"
+2. "jobs": JSON array of job postings (empty if none found)
+3. "message": Brief explanation if no jobs found
+
+For each job in the array include:
 - title: Job title
 - company: Company name
 - url: Direct URL to the job posting
@@ -142,20 +168,30 @@ Return a JSON array of job postings found. For each job include:
 - posted_date: When posted (if available, estimate if within 24h/week/month)
 - description_preview: First 200 chars of description
 
-Only include jobs that appear to be posted within the last 7 days.
-Return ONLY the JSON array. If no jobs found or page inaccessible, return [].
+Only include jobs that appear to be posted within the last 24 hours (1 day).
 
-Example format:
-[
-  {{
-    "title": "Senior Software Engineer",
-    "company": "{company_name}",
-    "url": "https://...",
-    "location": "San Francisco, CA",
-    "posted_date": "2025-01-28",
-    "description_preview": "We are looking for..."
-  }}
-]"""
+Example response:
+{{
+  "status": "found_jobs",
+  "jobs": [
+    {{
+      "title": "Senior Software Engineer",
+      "company": "{company_name}",
+      "url": "https://...",
+      "location": "San Francisco, CA",
+      "posted_date": "2025-01-28",
+      "description_preview": "We are looking for..."
+    }}
+  ],
+  "message": ""
+}}
+
+Or if no jobs:
+{{
+  "status": "no_matching_jobs",
+  "jobs": [],
+  "message": "Found 15 jobs but none matched the target roles"
+}}"""
             }]
         )
 
@@ -164,11 +200,40 @@ Example format:
             if hasattr(block, 'text'):
                 text_content += block.text
 
-        return parse_jobs_from_response(text_content, company_name)
+        # Try to parse as structured response
+        try:
+            match = re.search(r'\{.*\}', text_content, re.DOTALL)
+            if match:
+                result = json.loads(match.group())
+                status = result.get('status', 'unknown')
+                jobs = result.get('jobs', [])
+                message = result.get('message', '')
+
+                # Parse jobs from the structured response
+                parsed_jobs = []
+                for job in jobs:
+                    if isinstance(job, dict) and job.get('url'):
+                        if not job.get('company'):
+                            job['company'] = company_name
+                        job['id'] = hashlib.md5(job['url'].encode()).hexdigest()[:12]
+                        parsed_jobs.append(job)
+
+                if parsed_jobs:
+                    return parsed_jobs, "found_jobs"
+                else:
+                    return [], f"{status}: {message}" if message else status
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+        # Fallback: try to parse as simple array
+        jobs = parse_jobs_from_response(text_content, company_name)
+        if jobs:
+            return jobs, "found_jobs"
+        else:
+            return [], "no_jobs_in_response"
 
     except Exception as e:
-        print(f"    Warning: Careers page search failed: {e}")
-        return []
+        return [], f"error: {str(e)[:50]}"
 
 
 def _search_linkedin_for_company(
@@ -199,7 +264,7 @@ Return a JSON array of job postings found. For each job include:
 - posted_date: When posted (if available)
 - description_preview: First 200 chars of description
 
-Only include jobs that appear to be posted within the last 7 days.
+Only include jobs that appear to be posted within the last 24 hours (1 day).
 Return ONLY the JSON array. If no jobs found, return [].
 
 Example format:
@@ -278,7 +343,7 @@ Return a JSON array of job postings. For each job include:
 - posted_date: When posted (if available)
 - description_preview: First 200 chars of description
 
-Only include jobs posted within the last 7 days.
+Only include jobs posted within the last 24 hours (1 day).
 Return ONLY the JSON array. If no jobs found, return []."""
             }]
         )
@@ -360,27 +425,33 @@ def fetch_job_details(
     company = job.get('company', 'Unknown')
     title = job.get('title', '')
 
+    # Log the URL being fetched for debugging
+    print(f"      URL: {url[:80]}{'...' if len(url) > 80 else ''}")
+
     # First try direct fetch
-    text_content, success = _try_direct_fetch(client, url, budget_tracker, job.get('id'))
+    text_content, success, fail_reason = _try_direct_fetch(client, url, budget_tracker, job.get('id'))
 
     if success and len(text_content) >= 500:
+        print(f"      Direct fetch: OK ({len(text_content)} chars)")
         job['description'] = text_content
         job['description_fetched'] = True
         job['fetch_source'] = 'direct'
         return job
 
     # Direct fetch failed or too short - try LinkedIn fallback
-    print(f"    Direct fetch insufficient, trying LinkedIn...")
+    print(f"      Direct fetch failed: {fail_reason}")
+    print(f"      Trying LinkedIn for: {title} @ {company}...")
     linkedin_content = _try_linkedin_job_search(client, company, title, budget_tracker, job.get('id'))
 
     if linkedin_content and len(linkedin_content) >= 500:
+        print(f"      LinkedIn fetch: OK ({len(linkedin_content)} chars)")
         job['description'] = linkedin_content
         job['description_fetched'] = True
         job['fetch_source'] = 'linkedin'
         return job
 
     # Both failed - use preview
-    print(f"    Warning: Could not fetch full job details")
+    print(f"      Warning: Both fetches failed, using preview only")
     job['description'] = job.get('description_preview', '')
     job['description_fetched'] = False
     job['fetch_source'] = 'preview_only'
@@ -393,8 +464,13 @@ def _try_direct_fetch(
     url: str,
     budget_tracker: Optional[BudgetTracker],
     job_id: str
-) -> tuple[str, bool]:
-    """Try to fetch job description directly from URL."""
+) -> tuple[str, bool, str]:
+    """
+    Try to fetch job description directly from URL.
+
+    Returns:
+        Tuple of (content, success, fail_reason)
+    """
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -418,7 +494,7 @@ Extract and return the complete job description including:
 
 Return the full text content. Do not summarize.
 
-If you cannot access the page, respond with: FETCH_FAILED"""
+If you cannot access the page, respond with: FETCH_FAILED: <reason>"""
             }]
         )
 
@@ -436,9 +512,10 @@ If you cannot access the page, respond with: FETCH_FAILED"""
             )
             budget_tracker.add("fetch_job", cost, {"job_id": job_id})
 
-        # Check for failure
+        # Check for explicit failure
         if "FETCH_FAILED" in text_content:
-            return "", False
+            reason = text_content.split("FETCH_FAILED:")[-1].strip()[:50] if ":" in text_content else "unknown"
+            return "", False, f"explicit failure: {reason}"
 
         # Check for common failure patterns
         failure_patterns = [
@@ -448,13 +525,16 @@ If you cannot access the page, respond with: FETCH_FAILED"""
         text_lower = text_content.lower()
         for pattern in failure_patterns:
             if pattern in text_lower and len(text_content) < 600:
-                return "", False
+                return "", False, f"detected '{pattern}' in short response ({len(text_content)} chars)"
 
-        return text_content, True
+        # Check minimum length
+        if len(text_content) < 500:
+            return "", False, f"response too short ({len(text_content)} chars)"
+
+        return text_content, True, ""
 
     except Exception as e:
-        print(f"    Warning: Direct fetch error: {e}")
-        return "", False
+        return "", False, f"exception: {str(e)[:50]}"
 
 
 def _try_linkedin_job_search(

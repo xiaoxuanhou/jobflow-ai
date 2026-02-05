@@ -38,12 +38,12 @@ class VariantScore:
 class ResumeSelection:
     """Result of variant selection."""
     variant: Optional[str]  # None if YAML fallback
-    tex_content: Optional[str]  # Content of selected .tex file
-    file_path: Optional[str]  # Path to the .tex file
     summary_line: Optional[str]  # Pre-written summary line for this variant
-    selection_method: str  # "rule_based", "ai_tiebreaker", or "yaml_fallback"
+    selection_method: str  # "rule_based", "ai_tiebreaker", "ai_thoughtful", or "yaml_fallback"
     scores: list[VariantScore]  # All scores for transparency
     ai_reasoning: Optional[str]  # If AI was used, its reasoning
+    ambiguity_level: str = "clear"  # "clear", "moderate", or "high"
+    tradeoff_analysis: Optional[str] = None  # For ambiguous cases, explains tradeoffs
 
 
 def load_variant_meta(meta_path: str = "data/resume_variants/meta.yaml") -> dict:
@@ -234,6 +234,120 @@ Respond with ONLY a JSON object:
     return candidates[0].name, "Fallback: Could not parse AI response"
 
 
+def ai_select_variant_thoughtful(
+    job_description: str,
+    candidates: list[VariantScore],
+    budget_tracker: Optional['BudgetTracker'] = None
+) -> tuple[str, str, str]:
+    """
+    For highly ambiguous cases, provide deeper analysis with tradeoffs.
+
+    Used when variant scores are very close (gap < 5), indicating genuine
+    ambiguity about which variant is best.
+
+    Args:
+        job_description: Full job description text
+        candidates: Top 2-3 candidates with very similar scores
+        budget_tracker: Optional budget tracker
+
+    Returns:
+        Tuple of (selected_variant_name, reasoning, tradeoff_analysis)
+    """
+    import json
+    import anthropic
+    from budget import estimate_cost
+
+    client = anthropic.Anthropic()
+
+    # Build candidate descriptions
+    candidate_text = ""
+    for c in candidates:
+        candidate_text += f"\n**{c.name}** (score: {c.score}):\n"
+        candidate_text += f"  Description: {c.description}\n"
+        candidate_text += f"  Primary matches: {', '.join(c.primary_matches) if c.primary_matches else 'none'}\n"
+        candidate_text += f"  Secondary matches: {', '.join(c.secondary_matches) if c.secondary_matches else 'none'}\n"
+        candidate_text += f"  Anti-signals: {', '.join(c.anti_matches) if c.anti_matches else 'none'}\n"
+
+    # Truncate job description to save tokens
+    jd_truncated = job_description[:3000] if len(job_description) > 3000 else job_description
+
+    prompt = f"""This is a GENUINELY AMBIGUOUS case. Multiple resume variants scored similarly.
+
+## Job Description
+{jd_truncated}
+
+## Close Candidates
+{candidate_text}
+
+## Task
+1. Acknowledge this is a difficult choice - the scores are very close
+2. Analyze trade-offs for EACH candidate variant
+3. Make a selection with explicit confidence level
+4. Explain what information would help make a more confident choice
+
+Return a JSON object:
+{{
+  "selected": "variant_name",
+  "confidence": "low|medium|high",
+  "reasoning": "2-3 sentences explaining the selection",
+  "tradeoffs": {{
+    "variant1_name": "Pro: X. Con: Y.",
+    "variant2_name": "Pro: A. Con: B."
+  }},
+  "what_would_help": "What info would make this clearer (e.g., team composition, research vs production focus)"
+}}
+"""
+
+    response = client.messages.create(
+        model="claude-3-5-haiku-20241022",
+        max_tokens=512,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    # Track cost
+    if budget_tracker:
+        cost = estimate_cost(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            model="haiku"
+        )
+        budget_tracker.add("variant_selection_thoughtful", cost, {
+            "candidates": [c.name for c in candidates],
+            "ambiguity": "high"
+        })
+
+    # Parse response
+    text = response.content[0].text
+
+    # Extract JSON from response
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            result = json.loads(match.group())
+            selected = result.get('selected', candidates[0].name)
+            confidence = result.get('confidence', 'medium')
+            reasoning = result.get('reasoning', '')
+            tradeoffs = result.get('tradeoffs', {})
+            what_would_help = result.get('what_would_help', '')
+
+            # Format tradeoff analysis
+            tradeoff_lines = []
+            for variant, analysis in tradeoffs.items():
+                tradeoff_lines.append(f"- {variant}: {analysis}")
+            if what_would_help:
+                tradeoff_lines.append(f"\nMore info needed: {what_would_help}")
+
+            tradeoff_analysis = '\n'.join(tradeoff_lines)
+            full_reasoning = f"[{confidence} confidence] {reasoning}"
+
+            return selected, full_reasoning, tradeoff_analysis
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback to first candidate if parsing fails
+    return candidates[0].name, "Fallback: Could not parse AI response", ""
+
+
 def select_resume_variant(
     job_description: str,
     meta_path: str = "data/resume_variants/meta.yaml",
@@ -268,8 +382,6 @@ def select_resume_variant(
     if not scores:
         return ResumeSelection(
             variant=None,
-            tex_content=None,
-            file_path=None,
             summary_line=None,
             selection_method="yaml_fallback",
             scores=[],
@@ -283,26 +395,31 @@ def select_resume_variant(
     if top.score < min_score:
         return ResumeSelection(
             variant=None,
-            tex_content=None,
-            file_path=None,
             summary_line=None,
             selection_method="yaml_fallback",
             scores=scores,
-            ai_reasoning=f"Top score ({top.score}) below threshold ({min_score})"
+            ai_reasoning=f"Top score ({top.score}) below threshold ({min_score})",
+            ambiguity_level="clear",
+            tradeoff_analysis=None
         )
 
-    # Determine selection method
+    # Calculate gap to determine ambiguity level
+    gap = top.score - (second.score if second else 0)
+
+    # Determine selection method and ambiguity level
     selected_name = None
     ai_reasoning = None
     selection_method = "rule_based"
+    ambiguity_level = "clear"
+    tradeoff_analysis = None
 
-    if second is None or (top.score - second.score) >= auto_select_gap:
+    if second is None or gap >= auto_select_gap:
         # Clear winner - auto select
         selected_name = top.name
         selection_method = "rule_based"
-    else:
-        # Close scores - use AI tiebreaker
-        # Get top 3 candidates within reasonable range of top score
+        ambiguity_level = "clear"
+    elif gap >= 5:
+        # Moderate ambiguity - standard AI tiebreaker
         close_candidates = [s for s in scores if s.score >= top.score - auto_select_gap][:3]
 
         if len(close_candidates) > 1:
@@ -312,30 +429,38 @@ def select_resume_variant(
                 budget_tracker
             )
             selection_method = "ai_tiebreaker"
+            ambiguity_level = "moderate"
         else:
             selected_name = top.name
             selection_method = "rule_based"
+    else:
+        # High ambiguity (gap < 5) - thoughtful selection with tradeoff analysis
+        close_candidates = [s for s in scores if s.score >= top.score - auto_select_gap][:3]
 
-    # Load the selected .tex file
+        if len(close_candidates) > 1:
+            selected_name, ai_reasoning, tradeoff_analysis = ai_select_variant_thoughtful(
+                job_description,
+                close_candidates,
+                budget_tracker
+            )
+            selection_method = "ai_thoughtful"
+            ambiguity_level = "high"
+        else:
+            selected_name = top.name
+            selection_method = "rule_based"
+            ambiguity_level = "clear"
+
+    # Get the selected variant's summary line
     selected_score = next((s for s in scores if s.name == selected_name), top)
-    tex_path = Path(selected_score.file_path)
-
-    if not tex_path.exists():
-        # Try relative to project root
-        tex_path = Path(__file__).parent / selected_score.file_path
-
-    tex_content = None
-    if tex_path.exists():
-        tex_content = tex_path.read_text(encoding='utf-8')
 
     return ResumeSelection(
         variant=selected_name,
-        tex_content=tex_content,
-        file_path=str(tex_path) if tex_path.exists() else None,
         summary_line=selected_score.summary_line,
         selection_method=selection_method,
         scores=scores,
-        ai_reasoning=ai_reasoning
+        ai_reasoning=ai_reasoning,
+        ambiguity_level=ambiguity_level,
+        tradeoff_analysis=tradeoff_analysis
     )
 
 
@@ -351,6 +476,7 @@ def format_selection_summary(selection: ResumeSelection) -> str:
     """
     lines = ["Resume Variant Selection:"]
     lines.append(f"  Method: {selection.selection_method}")
+    lines.append(f"  Ambiguity: {selection.ambiguity_level}")
 
     if selection.variant:
         lines.append(f"  Selected: {selection.variant}")
@@ -360,6 +486,12 @@ def format_selection_summary(selection: ResumeSelection) -> str:
         lines.append("  Selected: YAML fallback (no variant matched)")
         if selection.ai_reasoning:
             lines.append(f"  Reason: {selection.ai_reasoning}")
+
+    # Show tradeoff analysis for ambiguous cases
+    if selection.tradeoff_analysis:
+        lines.append("\n  Tradeoff Analysis:")
+        for line in selection.tradeoff_analysis.split('\n'):
+            lines.append(f"    {line}")
 
     lines.append("\n  Score Ranking:")
     for score in selection.scores[:5]:  # Show top 5

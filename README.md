@@ -7,7 +7,7 @@ AI-powered job search automation: discovers new postings, tailors your resume, a
 - **Automated Discovery**: Finds new job postings from target companies within 24 hours
 - **Smart Filtering**: Three-stage filtering (rule-based → AI scoring → ranking) to surface the best matches
 - **Resume Variant Selection**: Automatically selects the best resume variant for each role type
-- **Resume Tailoring**: Generates customized LaTeX resumes optimized for each role
+- **Resume Tailoring**: Generates customized DOCX/PDF resumes optimized for each role
 - **Outreach Generation**: Creates personalized LinkedIn connection scripts based on shared backgrounds
 - **Cost-Conscious**: Estimates ~$0.50/day for 15 companies, capped at 5 jobs processed
 - **GitHub Actions Ready**: Runs daily via cron, sends email alerts with results
@@ -156,7 +156,7 @@ python main.py cost                        # Estimate daily cost
 | `--skip-profiles` | Skip LinkedIn profile search |
 | `--output DIR` | Output directory (default: `outputs/`) |
 | `--resume FILE` | Resume YAML path (default: `data/resume.yaml`) |
-| `--template FILE` | LaTeX template (default: `data/templates/resume.tex.j2`) |
+| `--template FILE` | Deprecated - DOCX is now generated directly |
 
 ## Output Structure
 
@@ -167,8 +167,8 @@ outputs/2025-01-29/
 ├── budget_log.json          # Cost tracking
 ├── daily_summary.md         # Email digest content
 ├── anthropic-applied-scientist/
-│   ├── resume.tex           # Tailored LaTeX resume
-│   ├── resume.pdf           # Compiled PDF (if pdflatex available)
+│   ├── resume.docx          # Tailored DOCX resume
+│   ├── resume.pdf           # PDF version (if Word/LibreOffice available)
 │   ├── outreach.md          # LinkedIn scripts
 │   ├── outreach.json        # Structured outreach data
 │   ├── analysis.json        # Job analysis
@@ -234,7 +234,7 @@ outputs/2025-01-29/
                                                         ▼
                                                ┌─────────────────┐
                                                │    Outputs      │
-                                               │ - Tailored .tex │
+                                               │ - Tailored .docx│
                                                │ - Outreach .md  │
                                                │ - Analysis .json│
                                                └─────────────────┘
@@ -244,19 +244,17 @@ outputs/2025-01-29/
 
 ### Resume Variants
 
-Place your `.tex` resume variants in `data/original/` and configure `data/resume_variants/meta.yaml` with keyword signals. The system will:
+Configure `data/resume_variants/meta.yaml` with keyword signals to guide variant selection. The system will:
 
 1. Score each variant against the job description (free, rule-based)
 2. Auto-select if there's a clear winner, or use Haiku for tiebreaking (~$0.002)
-3. Apply minimal tailoring (summary, skill order) to the selected variant
+3. Generate a DOCX resume using the selected variant's context for tailoring
 
-### LaTeX Template
+### PDF Generation
 
-Edit `data/templates/resume.tex.j2`. Uses Jinja2 with modified delimiters to avoid LaTeX conflicts:
-
-- `<% %>` for blocks (if/for)
-- `<< >>` for variables
-- `<# #>` for comments
+The system generates DOCX files directly and converts them to PDF:
+- **Windows**: Requires Microsoft Word installed
+- **Linux/Mac**: Requires LibreOffice installed (`sudo apt install libreoffice-writer`)
 
 ### Ranking Priorities
 
